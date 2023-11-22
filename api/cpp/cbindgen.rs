@@ -692,6 +692,7 @@ fn gen_backend_qt(
         "NativeTabWidget",
         "NativeTab",
         "NativeStyleMetrics",
+        "QtStylePalette",
     ];
 
     config.export.include = items.iter().map(|x| x.to_string()).collect();
@@ -701,6 +702,11 @@ fn gen_backend_qt(
         "NativeStyleMetrics".to_owned(),
         "    inline explicit NativeStyleMetrics(void* = nullptr); inline ~NativeStyleMetrics();"
             .to_owned(),
+    );
+
+    config.export.body.insert(
+        "QtStylePalette".to_owned(),
+        "    inline explicit QtStylePalette(void* = nullptr); inline ~QtStylePalette();".to_owned(),
     );
 
     let mut crate_dir = root_dir.to_owned();

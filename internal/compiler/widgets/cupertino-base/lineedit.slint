@@ -93,11 +93,11 @@ export component LineEdit {
                 x: min(0px, max(parent.width - self.width, self.computed_x));
                 width: max(parent.width, self.preferred-width);
                 height: 100%;
-                color: CupertinoPalette.foreground;
+                color: CupertinoPalette.on-background;
                 vertical-alignment: center;
                 font-size: CupertinoFontSettings.body.font-size;
                 font-weight: CupertinoFontSettings.body.font-weight;
-                selection-background-color: CupertinoPalette.accent-quaternary;
+                selection-background-color: CupertinoPalette.selection;
                 selection-foreground-color: self.color;
 
                 accepted => {

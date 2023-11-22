@@ -82,13 +82,13 @@ export component ListItem {
                 i-icon := Image {
                     image-fit: contain;
                     source: Icons.check-mark;
-                    colorize: CupertinoPalette.foreground;
+                    colorize: CupertinoPalette.on-background;
                     visible: root.selected;
                     width: 10px;
                 }
 
                 i-text := Text {
-                    color: CupertinoPalette.foreground;
+                    color: CupertinoPalette.on-background;
                     font-size: CupertinoFontSettings.body.font-size;
                     font-weight: CupertinoFontSettings.body.font-weight;
                     vertical-alignment: center;
