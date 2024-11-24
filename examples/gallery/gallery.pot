@@ -4,7 +4,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
-"POT-Creation-Date: 2024-11-18 03:16+0000\n"
+"POT-Creation-Date: 2024-11-24 03:26+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -49,41 +49,51 @@ msgctxt "Menu"
 msgid "About"
 msgstr ""
 
-#: ui/pages/table_view_page.slint:23
+#: ui/pages/table_view_page.slint:25
 msgctxt "TableViewPage"
 msgid "TableView"
 msgstr ""
 
-#: ui/pages/table_view_page.slint:25
+#: ui/pages/table_view_page.slint:27
 msgctxt "TableViewPage"
 msgid ""
 "StandardTableView can be used to display a list of text elements in columns "
 "and rows. It can be imported from \"std-widgets.slint\""
 msgstr ""
 
-#: ui/pages/table_view_page.slint:31
+#: ui/pages/table_view_page.slint:33
 msgctxt "TableViewPage"
 msgid "StandardTableView"
 msgstr ""
 
-#: ui/pages/table_view_page.slint:44
+#: ui/pages/table_view_page.slint:51
 msgctxt "TableViewPage"
 msgid "Header 1"
 msgstr ""
 
-#: ui/pages/table_view_page.slint:45
+#: ui/pages/table_view_page.slint:52
 msgctxt "TableViewPage"
 msgid "Header 2"
 msgstr ""
 
-#: ui/pages/table_view_page.slint:46
+#: ui/pages/table_view_page.slint:53
 msgctxt "TableViewPage"
 msgid "Header 3"
 msgstr ""
 
-#: ui/pages/table_view_page.slint:47
+#: ui/pages/table_view_page.slint:54
 msgctxt "TableViewPage"
 msgid "Header 4"
+msgstr ""
+
+#: ui/pages/table_view_page.slint:61
+msgctxt "TableViewPage"
+msgid "Filter by Header 1:"
+msgstr ""
+
+#: ui/pages/table_view_page.slint:65
+msgctxt "TableViewPage"
+msgid "Enter filter text"
 msgstr ""
 
 #: ui/pages/easings_page.slint:55

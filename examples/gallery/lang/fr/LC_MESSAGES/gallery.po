@@ -9,7 +9,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2024-11-18 03:16+0000\n"
+"POT-Creation-Date: 2024-11-24 03:26+0000\n"
 "PO-Revision-Date: 2023-06-06 13:52+0000\n"
 "Last-Translator: Olivier Goffart <olivier.goffart@slint-ui.com>, 2023\n"
 "Language-Team: French (https://app.transifex.com/slint/teams/170022/fr/)\n"
@@ -56,12 +56,12 @@ msgctxt "Menu"
 msgid "About"
 msgstr "À Propos"
 
-#: ui/pages/table_view_page.slint:23
+#: ui/pages/table_view_page.slint:25
 msgctxt "TableViewPage"
 msgid "TableView"
 msgstr "TableView"
 
-#: ui/pages/table_view_page.slint:25
+#: ui/pages/table_view_page.slint:27
 msgctxt "TableViewPage"
 msgid ""
 "StandardTableView can be used to display a list of text elements in columns "
@@ -70,30 +70,41 @@ msgstr ""
 "StandardTableView peut être utilisé pour afficher une liste d'éléments et "
 "colonnes"
 
-#: ui/pages/table_view_page.slint:31
+#: ui/pages/table_view_page.slint:33
 msgctxt "TableViewPage"
 msgid "StandardTableView"
 msgstr "StandardTableView"
 
-#: ui/pages/table_view_page.slint:44
+#: ui/pages/table_view_page.slint:51
 msgctxt "TableViewPage"
 msgid "Header 1"
 msgstr "En-tête 1"
 
-#: ui/pages/table_view_page.slint:45
+#: ui/pages/table_view_page.slint:52
 msgctxt "TableViewPage"
 msgid "Header 2"
 msgstr "En-tête 2"
 
-#: ui/pages/table_view_page.slint:46
+#: ui/pages/table_view_page.slint:53
 msgctxt "TableViewPage"
 msgid "Header 3"
 msgstr "En-tête 3"
 
-#: ui/pages/table_view_page.slint:47
+#: ui/pages/table_view_page.slint:54
 msgctxt "TableViewPage"
 msgid "Header 4"
 msgstr "En-tête 4"
+
+#: ui/pages/table_view_page.slint:61
+msgctxt "TableViewPage"
+msgid "Filter by Header 1:"
+msgstr ""
+
+#: ui/pages/table_view_page.slint:65
+#, fuzzy
+msgctxt "TableViewPage"
+msgid "Enter filter text"
+msgstr "Entrez du texte"
 
 #: ui/pages/easings_page.slint:55
 msgctxt "EasingsPage"
