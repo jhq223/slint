@@ -11,10 +11,10 @@
     created by the backend in a type-erased manner.
 */
 extern crate alloc;
+use crate::api::PlatformError;
 use crate::lengths::LogicalLength;
 use crate::Coord;
 use crate::SharedString;
-#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 
 pub use euclid;
@@ -56,9 +56,12 @@ pub mod boxshadowcache;
 pub mod border_radius;
 pub use border_radius::*;
 
+#[cfg(feature = "unstable-wgpu-25")]
+pub mod wgpu_25;
+
 /// CachedGraphicsData allows the graphics backend to store an arbitrary piece of data associated with
 /// an item, which is typically computed by accessing properties. The dependency_tracker is used to allow
-/// for a lazy computation. Typically back ends store either compute intensive data or handles that refer to
+/// for a lazy computation. Typically, back ends store either compute intensive data or handles that refer to
 /// data that's stored in GPU memory.
 pub struct CachedGraphicsData<T> {
     /// The backend specific data.
@@ -163,6 +166,73 @@ impl FontRequest {
             ..Default::default()
         }
     }
+}
+
+/// Internal enum to specify which version of OpenGL to request
+/// from the windowing system.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RequestedOpenGLVersion {
+    /// OpenGL
+    OpenGL(Option<(u8, u8)>),
+    /// OpenGL ES
+    OpenGLES(Option<(u8, u8)>),
+}
+
+/// Internal enum specify which graphics API should be used, when
+/// the backend selector requests that from a built-in backend.
+#[derive(Debug, Clone)]
+pub enum RequestedGraphicsAPI {
+    /// OpenGL (ES)
+    OpenGL(RequestedOpenGLVersion),
+    /// Metal
+    Metal,
+    /// Vulkan
+    Vulkan,
+    /// Direct 3D
+    Direct3D,
+    #[cfg(feature = "unstable-wgpu-25")]
+    /// WGPU 25.x
+    WGPU25(wgpu_25::WGPUConfiguration),
+}
+
+impl TryFrom<RequestedGraphicsAPI> for RequestedOpenGLVersion {
+    type Error = PlatformError;
+
+    fn try_from(requested_graphics_api: RequestedGraphicsAPI) -> Result<Self, Self::Error> {
+        match requested_graphics_api {
+            RequestedGraphicsAPI::OpenGL(requested_open_glversion) => Ok(requested_open_glversion),
+            RequestedGraphicsAPI::Metal => {
+                Err("Metal rendering is not supported with an OpenGL renderer".into())
+            }
+            RequestedGraphicsAPI::Vulkan => {
+                Err("Vulkan rendering is not supported with an OpenGL renderer".into())
+            }
+            RequestedGraphicsAPI::Direct3D => {
+                Err("Direct3D rendering is not supported with an OpenGL renderer".into())
+            }
+            #[cfg(feature = "unstable-wgpu-25")]
+            RequestedGraphicsAPI::WGPU25(..) => {
+                Err("WGPU 25.x rendering is not supported with an OpenGL renderer".into())
+            }
+        }
+    }
+}
+
+impl From<RequestedOpenGLVersion> for RequestedGraphicsAPI {
+    fn from(version: RequestedOpenGLVersion) -> Self {
+        Self::OpenGL(version)
+    }
+}
+
+/// Private API exposed to just the renderers to create GraphicsAPI instance with
+/// non-exhaustive enum variant.
+#[cfg(feature = "unstable-wgpu-25")]
+pub fn create_graphics_api_wgpu_25(
+    instance: wgpu_25::wgpu::Instance,
+    device: wgpu_25::wgpu::Device,
+    queue: wgpu_25::wgpu::Queue,
+) -> crate::api::GraphicsAPI<'static> {
+    crate::api::GraphicsAPI::WGPU25 { instance, device, queue }
 }
 
 /// Internal module for use by cbindgen and the C++ platform API layer.

@@ -3,6 +3,7 @@
 packages:
   - "api/node"
   - "editors/vscode"
+  - "tools/figma-inspector"
   - "tools/slintpad"
   - "demos/printerdemo/node"
   - "demos/home-automation/node"
@@ -10,5 +11,5 @@ packages:
   - "examples/carousel/node"
   - "examples/todo/node"
   - "examples/memory"
-  - "docs/editor"
-  - "docs"
+  - "docs/astro"
+  - "docs/common"

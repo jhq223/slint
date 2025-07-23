@@ -76,16 +76,23 @@ fn main() -> Result<()> {
 
     let mut error_count = 0;
 
-    for entry in walkdir::WalkDir::new(args.docs_folder.clone()).into_iter().filter(|e| {
-        let Ok(e) = e else {
-            return false;
-        };
-        let ext = e.path().extension();
-        ext == Some(&OsString::from("md")) || ext == Some(&OsString::from("mdx"))
-    }) {
-        if let Err(e) = process_doc_file(entry.unwrap().path(), &project_root, &args) {
-            eprintln!("    Error: {e:?}");
-            error_count += 1;
+    for entry in walkdir::WalkDir::new(args.docs_folder.clone()).sort_by_file_name().into_iter() {
+        match &entry {
+            Err(err) => {
+                eprintln!("    File Error: {err:?}");
+                error_count += 1;
+            }
+            Ok(entry) => {
+                let path = entry.path();
+                let ext = path.extension();
+
+                if ext == Some(&OsString::from("md")) || ext == Some(&OsString::from("mdx")) {
+                    if let Err(e) = process_doc_file(path, &project_root, &args) {
+                        eprintln!("    Error: {e:?}");
+                        error_count += 1;
+                    }
+                }
+            }
         }
     }
 
@@ -94,7 +101,7 @@ fn main() -> Result<()> {
 
 fn wrap_code(code: &str, size: Option<(usize, usize)>) -> String {
     let sizing_lines = if let Some((w, h)) = size {
-        format!("width: {w}px;\nheight: {h}px;\n")
+        format!("width: {w}px;\nheight: {h}px;\n    ")
     } else {
         String::new()
     };
@@ -103,7 +110,7 @@ fn wrap_code(code: &str, size: Option<(usize, usize)>) -> String {
     background: #0000;
     {sizing_lines}VerticalLayout {{
         Rectangle {{
-        {code}  
+        {code}
         }}
     }}
 }}"#
@@ -220,7 +227,7 @@ fn extract_code_from_text(text: &str, size: Option<(usize, usize)>) -> Result<St
     }
 
     let Some(first_line_end) = without_leading.find('\n') else {
-        return Err("text in CodeSnippetMD tag is one line only, so ot a proper code block".into());
+        return Err("text in CodeSnippetMD tag is one line only, so not a proper code block".into());
     };
 
     let code = &without_leading[first_line_end..];
@@ -338,9 +345,11 @@ fn process_tag(
 
     let size = width.and_then(|w| height.map(|h| (w, h)));
 
+    let scale_factor = attr.get("scale").and_then(|s| s.parse::<f32>().ok()).unwrap_or(1.0);
+
     let code = extract_code_from_text(text, size)?;
 
-    build_and_snapshot(args, size, file_path, code.to_string(), &screenshot_path)
+    build_and_snapshot(args, size, scale_factor, file_path, code.to_string(), &screenshot_path)
 }
 
 fn process_doc_file(file: &Path, project_root: &Path, args: &Cli) -> Result<()> {
@@ -381,7 +390,7 @@ fn find_project_root(docs_folder: &Path) -> Result<PathBuf> {
     let mut path = Some(docs_folder.canonicalize()?);
 
     while let Some(d) = path {
-        if d.join("astro.config.mjs").exists() {
+        if d.join("astro.config.mjs").exists() || d.join("astro.config.ts").exists() {
             return Ok(d);
         }
         path = d.parent().map(|p| p.to_path_buf());
@@ -392,12 +401,13 @@ fn find_project_root(docs_folder: &Path) -> Result<PathBuf> {
 
 fn build_and_snapshot(
     args: &Cli,
-    _size: Option<(usize, usize)>,
+    size: Option<(usize, usize)>,
+    scale_factor: f32,
     doc_file_path: &Path,
     source: String,
     screenshot_path: &Path,
 ) -> Result<()> {
-    let compiler = init_compiler(&args);
+    let compiler = init_compiler(args);
     let r = spin_on::spin_on(compiler.build_from_source(source, doc_file_path.to_path_buf()));
     r.print_diagnostics();
     if r.has_errors() {
@@ -417,7 +427,17 @@ fn build_and_snapshot(
 
     let component = c.create()?;
 
+    // FIXME: The scale factor needs to be set before the size is set!
+    headless::set_window_scale_factor(component.window(), scale_factor);
+
+    if let Some((x, y)) = size {
+        component.window().set_size(i_slint_core::api::LogicalSize::new(x as f32, y as f32));
+    } else {
+        component.window().set_size(i_slint_core::api::LogicalSize::new(200.0, 200.0));
+    }
+
     component.show()?;
+
     let screen_dump = component.window().take_snapshot()?;
 
     {
@@ -435,8 +455,15 @@ fn build_and_snapshot(
         ""
     };
 
+    let scale_factor = component.window().scale_factor();
+    let scale_str = if scale_factor >= 0.99 && scale_factor <= 1.01 {
+        String::new()
+    } else {
+        format!("@{scale_factor}x")
+    };
+
     eprintln!(
-        "    Saving image with {}x{} pixels to {screenshot_path:?}{overwrite_tag}",
+        "    Saving image with {}x{}{scale_str} pixels to {screenshot_path:?}{overwrite_tag}",
         screen_dump.width(),
         screen_dump.height()
     );

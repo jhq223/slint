@@ -110,6 +110,32 @@ fn process_tabwidget(
                 &old.into_inner(),
             );
         }
+        let role = crate::typeregister::BUILTIN
+            .with(|e| e.enums.AccessibleRole.clone())
+            .try_value_from_string("tab-panel")
+            .unwrap();
+        let old = child.borrow_mut().bindings.insert(
+            SmolStr::new_static("accessible-role"),
+            RefCell::new(Expression::EnumerationValue(role).into()),
+        );
+        if let Some(old) = old {
+            diag.push_error(
+                "The property 'accessible-role' cannot be set for Tabs inside a TabWidget"
+                    .to_owned(),
+                &old.into_inner(),
+            );
+        }
+        let title_ref = RefCell::new(
+            Expression::PropertyReference(NamedReference::new(child, "title".into())).into(),
+        );
+        let old = child.borrow_mut().bindings.insert("accessible-label".into(), title_ref);
+        if let Some(old) = old {
+            diag.push_error(
+                "The property 'accessible-label' cannot be set for Tabs inside a TabWidget"
+                    .to_owned(),
+                &old.into_inner(),
+            );
+        }
 
         let mut tab = Element {
             id: format_smolstr!("{}-tab{}", elem.borrow().id, index),
@@ -241,7 +267,7 @@ fn set_geometry_prop(
     );
     if let Some(old) = old.map(RefCell::into_inner) {
         diag.push_error(
-            format!("The property '{}' cannot be set for Tabs inside a TabWidget", prop),
+            format!("The property '{prop}' cannot be set for Tabs inside a TabWidget"),
             &old,
         );
     }

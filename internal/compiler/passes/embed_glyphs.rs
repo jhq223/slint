@@ -53,7 +53,6 @@ pub fn embed_glyphs<'a>(
 pub fn embed_glyphs<'a>(
     doc: &Document,
     compiler_config: &CompilerConfiguration,
-    scale_factor: f64,
     mut pixel_sizes: Vec<i16>,
     mut characters_seen: HashSet<char>,
     all_docs: impl Iterator<Item = &'a crate::object_tree::Document> + 'a,
@@ -62,6 +61,7 @@ pub fn embed_glyphs<'a>(
     use crate::diagnostics::Spanned;
 
     let generic_diag_location = doc.node.as_ref().map(|n| n.to_source_location());
+    let scale_factor = compiler_config.const_scale_factor;
 
     characters_seen.extend(
         ('a'..='z')
@@ -82,8 +82,7 @@ pub fn embed_glyphs<'a>(
             } else {
                 diag.push_error(
                     format!(
-                        "Invalid font size '{}' specified in `SLINT_FONT_SIZES`",
-                        custom_size_str
+                        "Invalid font size '{custom_size_str}' specified in `SLINT_FONT_SIZES`"
                     ),
                     &generic_diag_location,
                 );
@@ -99,7 +98,7 @@ pub fn embed_glyphs<'a>(
     sharedfontdb::FONT_DB.with(|db| {
         embed_glyphs_with_fontdb(
             compiler_config,
-            &db,
+            db,
             doc,
             pixel_sizes,
             characters_seen,
@@ -131,7 +130,7 @@ fn embed_glyphs_with_fontdb<'a>(
             for (font_path, import_token) in doc.custom_fonts.iter() {
                 let face_count = fontdb_mut.faces().count();
                 if let Err(e) = fontdb_mut.make_mut().load_font_file(font_path) {
-                    diag.push_error(format!("Error loading font: {}", e), import_token);
+                    diag.push_error(format!("Error loading font: {e}"), import_token);
                 } else {
                     custom_fonts.extend(fontdb_mut.faces().skip(face_count).map(|info| info.id))
                 }
@@ -250,6 +249,7 @@ fn embed_glyphs_with_fontdb<'a>(
             &pixel_sizes,
             characters_seen.iter().cloned(),
             &fallback_fonts,
+            compiler_config,
         );
 
         let resource_id = doc.embedded_file_resources.borrow().len();
@@ -265,10 +265,7 @@ fn embed_glyphs_with_fontdb<'a>(
 
         for c in doc.exported_roots() {
             c.init_code.borrow_mut().font_registration_code.push(Expression::FunctionCall {
-                function: Box::new(Expression::BuiltinFunctionReference(
-                    BuiltinFunction::RegisterBitmapFont,
-                    None,
-                )),
+                function: BuiltinFunction::RegisterBitmapFont.into(),
                 arguments: vec![Expression::NumberLiteral(resource_id as _, Unit::None)],
                 source_location: None,
             });
@@ -313,8 +310,7 @@ fn get_fallback_fonts(
 
     #[cfg(not(any(
         target_family = "windows",
-        target_os = "macos",
-        target_os = "ios",
+        target_vendor = "apple",
         target_arch = "wasm32",
         target_os = "android"
     )))]
@@ -353,6 +349,7 @@ fn embed_font(
     pixel_sizes: &[i16],
     character_coverage: impl Iterator<Item = char>,
     fallback_fonts: &[Font],
+    _compiler_config: &CompilerConfiguration,
 ) -> BitmapFont {
     let mut character_map: Vec<CharacterMapEntry> = character_coverage
         .filter(|code_point| {
@@ -368,10 +365,13 @@ fn embed_font(
         })
         .collect();
 
-    #[cfg(feature = "embed-glyphs-as-sdf")]
-    let glyphs = embed_sdf_glyphs(pixel_sizes, &character_map, &font, fallback_fonts);
-
-    #[cfg(not(feature = "embed-glyphs-as-sdf"))]
+    #[cfg(feature = "sdf-fonts")]
+    let glyphs = if _compiler_config.use_sdf_fonts {
+        embed_sdf_glyphs(pixel_sizes, &character_map, &font, fallback_fonts)
+    } else {
+        embed_alpha_map_glyphs(pixel_sizes, &character_map, &font, fallback_fonts)
+    };
+    #[cfg(not(feature = "sdf-fonts"))]
     let glyphs = embed_alpha_map_glyphs(pixel_sizes, &character_map, &font, fallback_fonts);
 
     character_map.sort_by_key(|entry| entry.code_point);
@@ -391,11 +391,14 @@ fn embed_font(
         glyphs,
         weight: face_info.weight.0,
         italic: face_info.style != fontdb::Style::Normal,
-        sdf: cfg!(feature = "embed-glyphs-as-sdf"),
+        #[cfg(feature = "sdf-fonts")]
+        sdf: _compiler_config.use_sdf_fonts,
+        #[cfg(not(feature = "sdf-fonts"))]
+        sdf: false,
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "embed-glyphs-as-sdf")))]
+#[cfg(all(not(target_arch = "wasm32")))]
 fn embed_alpha_map_glyphs(
     pixel_sizes: &[i16],
     character_map: &Vec<CharacterMapEntry>,
@@ -420,11 +423,11 @@ fn embed_alpha_map_glyphs(
                         .unwrap_or_else(|| font.rasterize(*code_point, *pixel_size as _));
 
                     BitmapGlyph {
-                        x: i16::try_from(metrics.xmin).expect("large glyph x coordinate"),
-                        y: i16::try_from(metrics.ymin).expect("large glyph y coordinate"),
+                        x: i16::try_from(metrics.xmin * 64).expect("large glyph x coordinate"),
+                        y: i16::try_from(metrics.ymin * 64).expect("large glyph y coordinate"),
                         width: i16::try_from(metrics.width).expect("large width"),
                         height: i16::try_from(metrics.height).expect("large height"),
-                        x_advance: i16::try_from(metrics.advance_width as i64)
+                        x_advance: i16::try_from((metrics.advance_width * 64.) as i64)
                             .expect("large advance width"),
                         data: bitmap,
                     }
@@ -437,7 +440,7 @@ fn embed_alpha_map_glyphs(
     glyphs
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "embed-glyphs-as-sdf"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "sdf-fonts"))]
 fn embed_sdf_glyphs(
     pixel_sizes: &[i16],
     character_map: &Vec<CharacterMapEntry>,
@@ -467,15 +470,6 @@ fn embed_sdf_glyphs(
                 .unwrap_or_else(|| {
                     generate_sdf_for_glyph(font, *code_point, target_pixel_size, RANGE)
                 })
-                .map(|(metrics, bitmap)| BitmapGlyph {
-                    x: i16::try_from(metrics.xmin).expect("large glyph x coordinate"),
-                    y: i16::try_from(metrics.ymin).expect("large glyph y coordinate"),
-                    width: i16::try_from(metrics.width).expect("large width"),
-                    height: i16::try_from(metrics.height).expect("large height"),
-                    x_advance: i16::try_from(metrics.advance_width as i64)
-                        .expect("large advance width"),
-                    data: bitmap,
-                })
                 .unwrap_or_default()
         })
         .collect::<Vec<_>>();
@@ -483,20 +477,21 @@ fn embed_sdf_glyphs(
     vec![BitmapGlyphs { pixel_size: target_pixel_size, glyph_data }]
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "embed-glyphs-as-sdf"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "sdf-fonts"))]
 fn generate_sdf_for_glyph(
     font: &Font,
     code_point: char,
     target_pixel_size: i16,
     range: f64,
-) -> Option<(fontdue::Metrics, Vec<u8>)> {
+) -> Option<BitmapGlyph> {
     use fdsm::transform::Transform;
     use nalgebra::{Affine2, Similarity2, Vector2};
 
     let face =
-        ttf_parser_fdsm::Face::parse(font.face_data.as_ref().as_ref(), font.face_index).unwrap();
+        fdsm_ttf_parser::ttf_parser::Face::parse(font.face_data.as_ref().as_ref(), font.face_index)
+            .unwrap();
     let glyph_id = face.glyph_index(code_point).unwrap_or_default();
-    let mut shape = fdsm::shape::Shape::load_from_face(&face, glyph_id);
+    let mut shape = fdsm_ttf_parser::load_shape_from_face(&face, glyph_id);
 
     let metrics = font.metrics();
     let target_pixel_size = target_pixel_size as f64;
@@ -505,11 +500,10 @@ fn generate_sdf_for_glyph(
     // TODO: handle bitmap glyphs (emojis)
     let Some(bbox) = face.glyph_bounding_box(glyph_id) else {
         // For example, for space
-        let metrics = fontdue::Metrics {
-            advance_width: (face.glyph_hor_advance(glyph_id).unwrap_or(0) as f64 * scale) as f32,
+        return Some(BitmapGlyph {
+            x_advance: (face.glyph_hor_advance(glyph_id).unwrap_or(0) as f64 * scale * 64.) as i16,
             ..Default::default()
-        };
-        return Some((metrics, vec![]));
+        });
     };
 
     let width = ((bbox.x_max as f64 - bbox.x_min as f64) * scale + 2.).ceil() as u32;
@@ -531,7 +525,7 @@ fn generate_sdf_for_glyph(
 
     // Set up the resulting image and generate the distance field:
 
-    let mut sdf = image_fdsm::GrayImage::new(width, height);
+    let mut sdf = image::GrayImage::new(width, height);
     fdsm::generate::generate_sdf(&prepared_shape, range, &mut sdf);
     fdsm::render::correct_sign_sdf(
         &mut sdf,
@@ -556,17 +550,21 @@ fn generate_sdf_for_glyph(
     // (so that the last row will look like `data[len-1]*1 + data[len]*0`)
     glyph_data.push(0);
 
-    let metrics = fontdue::Metrics {
-        xmin: -(1. - bbox.x_min as f64 * scale).round() as i32,
-        ymin: -(1. - bbox.y_min as f64 * scale).round() as i32,
-        width: width as usize,
-        height: height as usize,
-        advance_width: (face.glyph_hor_advance(glyph_id).unwrap() as f64 * scale) as f32,
-        advance_height: 0.,         /*unused */
-        bounds: Default::default(), /*unused */
+    let bg = BitmapGlyph {
+        x: i16::try_from((-(1. - bbox.x_min as f64 * scale) * 64.).ceil() as i32)
+            .expect("large glyph x coordinate"),
+        y: i16::try_from((-(1. - bbox.y_min as f64 * scale) * 64.).ceil() as i32)
+            .expect("large glyph y coordinate"),
+        width: i16::try_from(width).expect("large width"),
+        height: i16::try_from(height).expect("large height"),
+        x_advance: i16::try_from(
+            (face.glyph_hor_advance(glyph_id).unwrap() as f64 * scale * 64.).round() as i32,
+        )
+        .expect("large advance width"),
+        data: glyph_data,
     };
 
-    Some((metrics, glyph_data))
+    Some(bg)
 }
 
 fn try_extract_font_size_from_element(elem: &ElementRc, property_name: &str) -> Option<f64> {

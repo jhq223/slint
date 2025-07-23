@@ -6,15 +6,11 @@ export { ScrollView } from "scrollview.slint";
 export { ListItem } from "components.slint";
 export { LineEdit } from "lineedit.slint";
 import { CupertinoPalette } from "styling.slint";
-
-export global LayoutSpec {
-    out property <length> layout-spacing: 10px;
-    out property <length> layout-padding: 12px;
-}
+export { MenuBarItem, MenuBar, MenuFrame, MenuItem } from "menu.slint";
 
 export global StyleMetrics {
-    out property <length> layout-spacing: LayoutSpec.layout-spacing;
-    out property <length> layout-padding: LayoutSpec.layout-padding;
+    out property <length> layout-spacing: 10px;
+    out property <length> layout-padding: 12px;
     out property <length> text-cursor-width: 1px;
     out property <color> window-background: CupertinoPalette.background;
     out property <color> default-text-color: CupertinoPalette.foreground;

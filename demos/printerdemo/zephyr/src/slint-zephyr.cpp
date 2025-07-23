@@ -283,15 +283,11 @@ void ZephyrWindowAdapter::maybe_redraw()
                 *px = (*px << 8) | (*px >> 8);
             }
         }
+        LOG_DBG("   - converted pixel data for x: %d y: %d w: %d h: %d", o.x, o.y, s.width,
+                s.height);
 #endif
 
-#ifdef CONFIG_MCUX_ELCDIF_PXP
-        // The display driver cannot do partial updates when the PXP is using the DMA API.
-        if (const auto ret =
-                    display_write(m_display, 0, 0, &m_buffer_descriptor, m_buffer.data()) != 0) {
-            LOG_WRN("display_write returned non-zero: %d", ret);
-        }
-#else
+#ifndef CONFIG_MCUX_ELCDIF_PXP
         m_buffer_descriptor.width = s.width;
         m_buffer_descriptor.height = s.height;
 
@@ -300,9 +296,20 @@ void ZephyrWindowAdapter::maybe_redraw()
                     != 0) {
             LOG_WRN("display_write returned non-zero: %d", ret);
         }
-#endif
         LOG_DBG("   - rendered x: %d y: %d w: %d h: %d", o.x, o.y, s.width, s.height);
+#endif
     }
+
+#ifdef CONFIG_MCUX_ELCDIF_PXP
+    // The display driver cannot do partial updates when the PXP is using the DMA API.
+    if (const auto ret =
+                display_write(m_display, 0, 0, &m_buffer_descriptor, m_buffer.data()) != 0) {
+        LOG_WRN("display_write returned non-zero: %d", ret);
+    }
+    LOG_DBG("   - rendered x: 0 y: 0 w: %d h: %d", m_buffer_descriptor.width,
+            m_buffer_descriptor.height);
+#endif
+
     const auto displayWriteDelta = k_uptime_delta(&start);
     LOG_DBG(" - total: %lld ms, slint: %lld ms, write: %lld ms",
             slintRenderDelta + displayWriteDelta, slintRenderDelta, displayWriteDelta);
@@ -412,8 +419,10 @@ void ZephyrPlatform::run_in_event_loop(Task event)
     k_sem_give(&SLINT_SEM);
 }
 
-void zephyr_process_input_event(struct input_event *event)
+void zephyr_process_input_event(struct input_event *event, void *user_data)
 {
+    ARG_UNUSED(user_data);
+
     static slint::LogicalPosition pos;
     static std::optional<slint::PointerEventButton> button;
 
@@ -474,7 +483,7 @@ void zephyr_process_input_event(struct input_event *event)
     }
 }
 
-INPUT_CALLBACK_DEFINE(DEVICE_DT_GET(DT_ALIAS(slint_input)), zephyr_process_input_event);
+INPUT_CALLBACK_DEFINE(DEVICE_DT_GET(DT_CHOSEN(zephyr_touch)), zephyr_process_input_event, NULL);
 
 void slint_zephyr_init(const struct device *display)
 {

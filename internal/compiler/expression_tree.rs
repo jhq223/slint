@@ -7,6 +7,7 @@ use crate::layout::Orientation;
 use crate::lookup::LookupCtx;
 use crate::object_tree::*;
 use crate::parser::{NodeOrToken, SyntaxNode};
+use crate::typeregister;
 use core::cell::RefCell;
 use smol_str::{format_smolstr, SmolStr};
 use std::cell::Cell;
@@ -38,20 +39,34 @@ pub enum BuiltinFunction {
     ATan,
     ATan2,
     Log,
+    Ln,
     Pow,
+    Exp,
+    ToFixed,
+    ToPrecision,
     SetFocusItem,
     ClearFocusItem,
     ShowPopupWindow,
     ClosePopupWindow,
+    /// Show a context popup menu.
+    /// Arguments are `(parent, entries, position)`
+    ///
+    /// The first argument (parent) is a reference to the `ContectMenu` native item
+    /// The second argument (entries) can either be of type Array of MenuEntry, or a reference to a MenuItem tree.
+    /// When it is a menu item tree, it is a ElementReference to the root of the tree, and in the LLR, a NumberLiteral to an index in  [`crate::llr::SubComponent::menu_item_trees`]
     ShowPopupMenu,
     SetSelectionOffsets,
-    /// A function that belongs to an item (such as TextInput's select-all function).
-    ItemMemberFunction(SmolStr),
     ItemFontMetrics,
     /// the "42".to_float()
     StringToFloat,
     /// the "42".is_float()
     StringIsFloat,
+    /// the "42".is_empty
+    StringIsEmpty,
+    /// the "42".length
+    StringCharacterCount,
+    StringToLowercase,
+    StringToUppercase,
     ColorRgbaStruct,
     ColorHsvaStruct,
     ColorBrighter,
@@ -64,6 +79,14 @@ pub enum BuiltinFunction {
     Rgb,
     Hsv,
     ColorScheme,
+    SupportsNativeMenuBar,
+    /// Setup the native menu bar, or the item-tree based menu bar
+    /// arguments are: `(ref entries, ref sub-menu, ref activated, item_tree_root?, no_native_menu_bar?)`
+    /// The two last arguments are only set if the menu is an item tree, in which case, `item_tree_root` is a reference
+    /// to the MenuItem tree root (just like the entries in the [`Self::ShowPopupMenu`] call), and `native_menu_bar` is
+    /// is a boolean literal that is true when we shouldn't try to setup the native menu bar.
+    /// If we have an item_tree_root, the code will assign the callback handler and properties on the non-native menubar as well
+    SetupNativeMenuBar,
     Use24HourFormat,
     MonthDayCount,
     MonthOffset,
@@ -80,6 +103,10 @@ pub enum BuiltinFunction {
     RegisterBitmapFont,
     Translate,
     UpdateTimers,
+    DetectOperatingSystem,
+    StartTimer,
+    StopTimer,
+    RestartTimer,
 }
 
 #[derive(Debug, Clone)]
@@ -153,18 +180,25 @@ declare_builtin_function_types!(
     ATan: (Type::Float32) -> Type::Angle,
     ATan2: (Type::Float32, Type::Float32) -> Type::Angle,
     Log: (Type::Float32, Type::Float32) -> Type::Float32,
+    Ln: (Type::Float32) -> Type::Float32,
     Pow: (Type::Float32, Type::Float32) -> Type::Float32,
+    Exp: (Type::Float32) -> Type::Float32,
+    ToFixed: (Type::Float32, Type::Int32) -> Type::String,
+    ToPrecision: (Type::Float32, Type::Int32) -> Type::String,
     SetFocusItem: (Type::ElementReference) -> Type::Void,
     ClearFocusItem: (Type::ElementReference) -> Type::Void,
     ShowPopupWindow: (Type::ElementReference) -> Type::Void,
     ClosePopupWindow: (Type::ElementReference) -> Type::Void,
-    ShowPopupMenu: (Type::ElementReference, Type::Model, crate::typeregister::logical_point_type()) -> Type::Void,
-    ItemMemberFunction(..): (Type::ElementReference) -> Type::Void,
+    ShowPopupMenu: (Type::ElementReference, Type::Model, typeregister::logical_point_type()) -> Type::Void,
     SetSelectionOffsets: (Type::ElementReference, Type::Int32, Type::Int32) -> Type::Void,
-    ItemFontMetrics: (Type::ElementReference) -> crate::typeregister::font_metrics_type(),
+    ItemFontMetrics: (Type::ElementReference) -> typeregister::font_metrics_type(),
     StringToFloat: (Type::String) -> Type::Float32,
     StringIsFloat: (Type::String) -> Type::Bool,
-    ImplicitLayoutInfo(..): (Type::ElementReference) -> crate::typeregister::layout_info_type(),
+    StringIsEmpty: (Type::String) -> Type::Bool,
+    StringCharacterCount: (Type::String) -> Type::Int32,
+    StringToLowercase: (Type::String) -> Type::String,
+    StringToUppercase: (Type::String) -> Type::String,
+    ImplicitLayoutInfo(..): (Type::ElementReference) -> Type::Struct(typeregister::layout_info_type()),
     ColorRgbaStruct: (Type::Color) -> Type::Struct(Rc::new(Struct {
         fields: IntoIterator::into_iter([
             (SmolStr::new_static("red"), Type::Int32),
@@ -208,8 +242,11 @@ declare_builtin_function_types!(
     Rgb: (Type::Int32, Type::Int32, Type::Int32, Type::Float32) -> Type::Color,
     Hsv: (Type::Float32, Type::Float32, Type::Float32, Type::Float32) -> Type::Color,
     ColorScheme: () -> Type::Enumeration(
-        crate::typeregister::BUILTIN.with(|e| e.enums.ColorScheme.clone()),
+        typeregister::BUILTIN.with(|e| e.enums.ColorScheme.clone()),
     ),
+    SupportsNativeMenuBar: () -> Type::Bool,
+    // entries, sub-menu, activate. But the types here are not accurate.
+    SetupNativeMenuBar: (Type::Model, typeregister::noarg_callback_type(), typeregister::noarg_callback_type()) -> Type::Void,
     MonthDayCount: (Type::Int32, Type::Int32) -> Type::Int32,
     MonthOffset: (Type::Int32, Type::Int32) -> Type::Int32,
     FormatDate: (Type::String, Type::Int32, Type::Int32, Type::Int32) -> Type::String,
@@ -218,7 +255,7 @@ declare_builtin_function_types!(
     ValidDate: (Type::String, Type::String) -> Type::Bool,
     ParseDate: (Type::String, Type::String) -> Type::Array(Rc::new(Type::Int32)),
     SetTextInputFocused: (Type::Bool) -> Type::Void,
-    ItemAbsolutePosition: (Type::ElementReference) -> crate::typeregister::logical_point_type(),
+    ItemAbsolutePosition: (Type::ElementReference) -> typeregister::logical_point_type(),
     RegisterCustomFontByPath: (Type::String) -> Type::Void,
     RegisterCustomFontByMemory: (Type::Int32) -> Type::Void,
     RegisterBitmapFont: (Type::Int32) -> Type::Void,
@@ -226,6 +263,12 @@ declare_builtin_function_types!(
     Translate: (Type::String, Type::String, Type::String, Type::Array(Type::String.into())) -> Type::String,
     Use24HourFormat: () -> Type::Bool,
     UpdateTimers: () -> Type::Void,
+    DetectOperatingSystem: () -> Type::Enumeration(
+        typeregister::BUILTIN.with(|e| e.enums.OperatingSystemType.clone()),
+    ),
+    StartTimer: (Type::ElementReference) -> Type::Void,
+    StopTimer: (Type::ElementReference) -> Type::Void,
+    RestartTimer: (Type::ElementReference) -> Type::Void,
 );
 
 impl BuiltinFunction {
@@ -233,7 +276,7 @@ impl BuiltinFunction {
         thread_local! {
             static TYPES: BuiltinFunctionTypes = BuiltinFunctionTypes::new();
         }
-        TYPES.with(|types| types.ty(&self))
+        TYPES.with(|types| types.ty(self))
     }
 
     /// It is const if the return value only depends on its argument and has no side effect
@@ -243,6 +286,8 @@ impl BuiltinFunction {
             BuiltinFunction::GetWindowDefaultFontSize => false,
             BuiltinFunction::AnimationTick => false,
             BuiltinFunction::ColorScheme => false,
+            BuiltinFunction::SupportsNativeMenuBar => false,
+            BuiltinFunction::SetupNativeMenuBar => false,
             BuiltinFunction::MonthDayCount => false,
             BuiltinFunction::MonthOffset => false,
             BuiltinFunction::FormatDate => false,
@@ -263,17 +308,25 @@ impl BuiltinFunction {
             | BuiltinFunction::ACos
             | BuiltinFunction::ASin
             | BuiltinFunction::Log
+            | BuiltinFunction::Ln
             | BuiltinFunction::Pow
+            | BuiltinFunction::Exp
             | BuiltinFunction::ATan
-            | BuiltinFunction::ATan2 => true,
+            | BuiltinFunction::ATan2
+            | BuiltinFunction::ToFixed
+            | BuiltinFunction::ToPrecision => true,
             BuiltinFunction::SetFocusItem | BuiltinFunction::ClearFocusItem => false,
             BuiltinFunction::ShowPopupWindow
             | BuiltinFunction::ClosePopupWindow
             | BuiltinFunction::ShowPopupMenu => false,
             BuiltinFunction::SetSelectionOffsets => false,
-            BuiltinFunction::ItemMemberFunction(..) => false,
             BuiltinFunction::ItemFontMetrics => false, // depends also on Window's font properties
-            BuiltinFunction::StringToFloat | BuiltinFunction::StringIsFloat => true,
+            BuiltinFunction::StringToFloat
+            | BuiltinFunction::StringIsFloat
+            | BuiltinFunction::StringIsEmpty
+            | BuiltinFunction::StringCharacterCount
+            | BuiltinFunction::StringToLowercase
+            | BuiltinFunction::StringToUppercase => true,
             BuiltinFunction::ColorRgbaStruct
             | BuiltinFunction::ColorHsvaStruct
             | BuiltinFunction::ColorBrighter
@@ -302,6 +355,10 @@ impl BuiltinFunction {
             BuiltinFunction::Translate => false,
             BuiltinFunction::Use24HourFormat => false,
             BuiltinFunction::UpdateTimers => false,
+            BuiltinFunction::DetectOperatingSystem => true,
+            BuiltinFunction::StartTimer => false,
+            BuiltinFunction::StopTimer => false,
+            BuiltinFunction::RestartTimer => false,
         }
     }
 
@@ -312,6 +369,8 @@ impl BuiltinFunction {
             BuiltinFunction::GetWindowDefaultFontSize => true,
             BuiltinFunction::AnimationTick => true,
             BuiltinFunction::ColorScheme => true,
+            BuiltinFunction::SupportsNativeMenuBar => true,
+            BuiltinFunction::SetupNativeMenuBar => false,
             BuiltinFunction::MonthDayCount => true,
             BuiltinFunction::MonthOffset => true,
             BuiltinFunction::FormatDate => true,
@@ -332,17 +391,25 @@ impl BuiltinFunction {
             | BuiltinFunction::ACos
             | BuiltinFunction::ASin
             | BuiltinFunction::Log
+            | BuiltinFunction::Ln
             | BuiltinFunction::Pow
+            | BuiltinFunction::Exp
             | BuiltinFunction::ATan
-            | BuiltinFunction::ATan2 => true,
+            | BuiltinFunction::ATan2
+            | BuiltinFunction::ToFixed
+            | BuiltinFunction::ToPrecision => true,
             BuiltinFunction::SetFocusItem | BuiltinFunction::ClearFocusItem => false,
             BuiltinFunction::ShowPopupWindow
             | BuiltinFunction::ClosePopupWindow
             | BuiltinFunction::ShowPopupMenu => false,
             BuiltinFunction::SetSelectionOffsets => false,
-            BuiltinFunction::ItemMemberFunction(..) => false,
             BuiltinFunction::ItemFontMetrics => true,
-            BuiltinFunction::StringToFloat | BuiltinFunction::StringIsFloat => true,
+            BuiltinFunction::StringToFloat
+            | BuiltinFunction::StringIsFloat
+            | BuiltinFunction::StringIsEmpty
+            | BuiltinFunction::StringCharacterCount
+            | BuiltinFunction::StringToLowercase
+            | BuiltinFunction::StringToUppercase => true,
             BuiltinFunction::ColorRgbaStruct
             | BuiltinFunction::ColorHsvaStruct
             | BuiltinFunction::ColorBrighter
@@ -364,7 +431,33 @@ impl BuiltinFunction {
             BuiltinFunction::Translate => true,
             BuiltinFunction::Use24HourFormat => true,
             BuiltinFunction::UpdateTimers => false,
+            BuiltinFunction::DetectOperatingSystem => true,
+            BuiltinFunction::StartTimer => false,
+            BuiltinFunction::StopTimer => false,
+            BuiltinFunction::RestartTimer => false,
         }
+    }
+}
+
+/// The base of a Expression::FunctionCall
+#[derive(Debug, Clone)]
+pub enum Callable {
+    Callback(NamedReference),
+    Function(NamedReference),
+    Builtin(BuiltinFunction),
+}
+impl Callable {
+    pub fn ty(&self) -> Type {
+        match self {
+            Callable::Callback(nr) => nr.ty(),
+            Callable::Function(nr) => nr.ty(),
+            Callable::Builtin(b) => Type::Function(b.ty()),
+        }
+    }
+}
+impl From<BuiltinFunction> for Callable {
+    fn from(function: BuiltinFunction) -> Self {
+        Self::Builtin(function)
     }
 }
 
@@ -381,7 +474,7 @@ pub fn operator_class(op: char) -> OperatorClass {
         '=' | '!' | '<' | '>' | '≤' | '≥' => OperatorClass::ComparisonOp,
         '&' | '|' => OperatorClass::LogicalOp,
         '+' | '-' | '/' | '*' => OperatorClass::ArithmeticOp,
-        _ => panic!("Invalid operator {:?}", op),
+        _ => panic!("Invalid operator {op:?}"),
     }
 }
 
@@ -498,31 +591,8 @@ pub enum Expression {
     /// Bool
     BoolLiteral(bool),
 
-    /// Reference to the callback `<name>` in the `<element>`
-    ///
-    /// Note: if we are to separate expression and statement, we probably do not need to have callback reference within expressions
-    CallbackReference(NamedReference, Option<NodeOrToken>),
-
     /// Reference to the property
     PropertyReference(NamedReference),
-
-    /// Reference to a function
-    FunctionReference(NamedReference, Option<NodeOrToken>),
-
-    /// Reference to a function built into the run-time, implemented natively
-    BuiltinFunctionReference(BuiltinFunction, Option<SourceLocation>),
-
-    /// A MemberFunction expression exists only for a short time, for example for `item.focus()` to be translated to
-    /// a regular FunctionCall expression where the base becomes the first argument.
-    MemberFunction {
-        base: Box<Expression>,
-        base_node: Option<NodeOrToken>,
-        member: Box<Expression>,
-    },
-
-    /// Reference to a macro understood by the compiler.
-    /// These should be transformed to other expression before reaching generation
-    BuiltinMacroReference(BuiltinMacroFunction, Option<NodeOrToken>),
 
     /// A reference to a specific element. This isn't possible to create in .slint syntax itself, but intermediate passes may generate this
     /// type of expression.
@@ -588,7 +658,7 @@ pub enum Expression {
 
     /// A function call
     FunctionCall {
-        function: Box<Expression>,
+        function: Callable,
         arguments: Vec<Expression>,
         source_location: Option<SourceLocation>,
     },
@@ -632,7 +702,7 @@ pub enum Expression {
         values: Vec<Expression>,
     },
     Struct {
-        ty: Type,
+        ty: Rc<Struct>,
         values: HashMap<SmolStr, Expression>,
     },
 
@@ -674,6 +744,11 @@ pub enum Expression {
         rhs: Box<Expression>,
     },
 
+    DebugHook {
+        expression: Box<Expression>,
+        id: SmolStr,
+    },
+
     EmptyComponentFactory,
 }
 
@@ -686,12 +761,7 @@ impl Expression {
             Expression::StringLiteral(_) => Type::String,
             Expression::NumberLiteral(_, unit) => unit.ty(),
             Expression::BoolLiteral(_) => Type::Bool,
-            Expression::CallbackReference(nr, _) => nr.ty(),
-            Expression::FunctionReference(nr, _) => nr.ty(),
             Expression::PropertyReference(nr) => nr.ty(),
-            Expression::BuiltinFunctionReference(funcref, _) => Type::Function(funcref.ty()),
-            Expression::MemberFunction { member, .. } => member.ty(),
-            Expression::BuiltinMacroReference { .. } => Type::Invalid, // We don't know the type
             Expression::ElementReference(_) => Type::ElementReference,
             Expression::RepeaterIndexReference { .. } => Type::Int32,
             Expression::RepeaterModelReference { element } => element
@@ -785,7 +855,7 @@ impl Expression {
             }
             Expression::UnaryOp { sub, .. } => sub.ty(),
             Expression::Array { element_ty, .. } => Type::Array(Rc::new(element_ty.clone())),
-            Expression::Struct { ty, .. } => ty.clone(),
+            Expression::Struct { ty, .. } => ty.clone().into(),
             Expression::PathData { .. } => Type::PathData,
             Expression::StoreLocalVariable { .. } => Type::Void,
             Expression::ReadLocalVariable { ty, .. } => ty.clone(),
@@ -796,10 +866,11 @@ impl Expression {
             // invalid because the expression is unreachable
             Expression::ReturnStatement(_) => Type::Invalid,
             Expression::LayoutCacheAccess { .. } => Type::LogicalLength,
-            Expression::ComputeLayoutInfo(..) => crate::typeregister::layout_info_type(),
+            Expression::ComputeLayoutInfo(..) => typeregister::layout_info_type().into(),
             Expression::SolveLayout(..) => Type::LayoutCache,
             Expression::MinMax { ty, .. } => ty.clone(),
             Expression::EmptyComponentFactory => Type::ComponentFactory,
+            Expression::DebugHook { expression, .. } => expression.ty(),
         }
     }
 
@@ -811,16 +882,8 @@ impl Expression {
             Expression::StringLiteral(_) => {}
             Expression::NumberLiteral(_, _) => {}
             Expression::BoolLiteral(_) => {}
-            Expression::CallbackReference { .. } => {}
             Expression::PropertyReference { .. } => {}
-            Expression::FunctionReference { .. } => {}
             Expression::FunctionParameterReference { .. } => {}
-            Expression::BuiltinFunctionReference { .. } => {}
-            Expression::MemberFunction { base, member, .. } => {
-                visitor(base);
-                visitor(member);
-            }
-            Expression::BuiltinMacroReference { .. } => {}
             Expression::ElementReference(_) => {}
             Expression::StructFieldAccess { base, .. } => visitor(base),
             Expression::ArrayIndex { array, index } => {
@@ -833,8 +896,7 @@ impl Expression {
             Expression::CodeBlock(sub) => {
                 sub.iter().for_each(visitor);
             }
-            Expression::FunctionCall { function, arguments, source_location: _ } => {
-                visitor(function);
+            Expression::FunctionCall { function: _, arguments, source_location: _ } => {
                 arguments.iter().for_each(visitor);
             }
             Expression::SelfAssignment { lhs, rhs, .. } => {
@@ -903,6 +965,7 @@ impl Expression {
                 visitor(rhs);
             }
             Expression::EmptyComponentFactory => {}
+            Expression::DebugHook { expression, .. } => visitor(expression),
         }
     }
 
@@ -913,16 +976,8 @@ impl Expression {
             Expression::StringLiteral(_) => {}
             Expression::NumberLiteral(_, _) => {}
             Expression::BoolLiteral(_) => {}
-            Expression::CallbackReference { .. } => {}
             Expression::PropertyReference { .. } => {}
-            Expression::FunctionReference { .. } => {}
             Expression::FunctionParameterReference { .. } => {}
-            Expression::BuiltinFunctionReference { .. } => {}
-            Expression::MemberFunction { base, member, .. } => {
-                visitor(base);
-                visitor(member);
-            }
-            Expression::BuiltinMacroReference { .. } => {}
             Expression::ElementReference(_) => {}
             Expression::StructFieldAccess { base, .. } => visitor(base),
             Expression::ArrayIndex { array, index } => {
@@ -935,8 +990,7 @@ impl Expression {
             Expression::CodeBlock(sub) => {
                 sub.iter_mut().for_each(visitor);
             }
-            Expression::FunctionCall { function, arguments, source_location: _ } => {
-                visitor(function);
+            Expression::FunctionCall { function: _, arguments, source_location: _ } => {
                 arguments.iter_mut().for_each(visitor);
             }
             Expression::SelfAssignment { lhs, rhs, .. } => {
@@ -1008,6 +1062,7 @@ impl Expression {
                 visitor(rhs);
             }
             Expression::EmptyComponentFactory => {}
+            Expression::DebugHook { expression, .. } => visitor(expression),
         }
     }
 
@@ -1030,23 +1085,25 @@ impl Expression {
             Expression::StringLiteral(_) => true,
             Expression::NumberLiteral(_, _) => true,
             Expression::BoolLiteral(_) => true,
-            Expression::CallbackReference { .. } => false,
-            Expression::FunctionReference(nr, _) => nr.is_constant(),
             Expression::PropertyReference(nr) => nr.is_constant(),
-            Expression::BuiltinFunctionReference(func, _) => func.is_const(),
-            Expression::MemberFunction { .. } => false,
             Expression::ElementReference(_) => false,
             Expression::RepeaterIndexReference { .. } => false,
             Expression::RepeaterModelReference { .. } => false,
-            Expression::FunctionParameterReference { .. } => false,
-            Expression::BuiltinMacroReference { .. } => true,
+            // Allow functions to be marked as const
+            Expression::FunctionParameterReference { .. } => true,
             Expression::StructFieldAccess { base, .. } => base.is_constant(),
             Expression::ArrayIndex { array, index } => array.is_constant() && index.is_constant(),
             Expression::Cast { from, .. } => from.is_constant(),
-            Expression::CodeBlock(sub) => sub.len() == 1 && sub.first().unwrap().is_constant(),
+            // This is conservative: the return value is the last expression in the block, but
+            // we kind of mean "pure" here too, so ensure the whole body is OK.
+            Expression::CodeBlock(sub) => sub.iter().all(|s| s.is_constant()),
             Expression::FunctionCall { function, arguments, .. } => {
-                // Assume that constant function are, in fact, pure
-                function.is_constant() && arguments.iter().all(|a| a.is_constant())
+                let is_const = match function {
+                    Callable::Builtin(b) => b.is_const(),
+                    Callable::Function(nr) => nr.is_constant(),
+                    Callable::Callback(..) => false,
+                };
+                is_const && arguments.iter().all(|a| a.is_constant())
             }
             Expression::SelfAssignment { .. } => false,
             Expression::ImageReference { .. } => true,
@@ -1067,9 +1124,9 @@ impl Expression {
                 Path::Events(_, _) => true,
                 Path::Commands(_) => false,
             },
-            Expression::StoreLocalVariable { .. } => false,
-            // we should somehow find out if this is constant or not
-            Expression::ReadLocalVariable { .. } => false,
+            Expression::StoreLocalVariable { value, .. } => value.is_constant(),
+            // We only load what we store, and stores are alredy checked
+            Expression::ReadLocalVariable { .. } => true,
             Expression::EasingCurve(_) => true,
             Expression::LinearGradient { angle, stops } => {
                 angle.is_constant() && stops.iter().all(|(c, s)| c.is_constant() && s.is_constant())
@@ -1087,6 +1144,7 @@ impl Expression {
             Expression::SolveLayout(..) => false,
             Expression::MinMax { lhs, rhs, .. } => lhs.is_constant() && rhs.is_constant(),
             Expression::EmptyComponentFactory => true,
+            Expression::DebugHook { .. } => false,
         }
     }
 
@@ -1095,7 +1153,7 @@ impl Expression {
     pub fn maybe_convert_to(
         self,
         target_type: Type,
-        node: &impl Spanned,
+        node: &dyn Spanned,
         diag: &mut BuildDiagnostics,
     ) -> Expression {
         let ty = self.ty();
@@ -1107,12 +1165,20 @@ impl Expression {
             self
         } else if ty.can_convert(&target_type) {
             let from = match (ty, &target_type) {
+                (Type::Brush, Type::Color) => match self {
+                    Expression::LinearGradient { .. } | Expression::RadialGradient { .. } => {
+                        let message = format!("Narrowing conversion from {0} to {1}. This can lead to unexpected behavior because the {0} is a gradient", Type::Brush, Type::Color);
+                        diag.push_warning(message, node);
+                        self
+                    }
+                    _ => self,
+                },
                 (Type::Percent, Type::Float32) => Expression::BinaryExpression {
                     lhs: Box::new(self),
                     rhs: Box::new(Expression::NumberLiteral(0.01, Unit::None)),
                     op: '*',
                 },
-                (ref from_ty @ Type::Struct(ref left), Type::Struct(ref right))
+                (ref from_ty @ Type::Struct(ref left), Type::Struct(right))
                     if left.fields != right.fields =>
                 {
                     if let Expression::Struct { mut values, .. } = self {
@@ -1124,7 +1190,7 @@ impl Expression {
                             );
                             new_values.insert(key, expression);
                         }
-                        return Expression::Struct { values: new_values, ty: target_type };
+                        return Expression::Struct { values: new_values, ty: right.clone() };
                     }
                     static COUNT: std::sync::atomic::AtomicUsize =
                         std::sync::atomic::AtomicUsize::new(0);
@@ -1150,7 +1216,7 @@ impl Expression {
                     }
                     return Expression::CodeBlock(vec![
                         Expression::StoreLocalVariable { name: var_name, value: Box::new(self) },
-                        Expression::Struct { values: new_values, ty: target_type },
+                        Expression::Struct { values: new_values, ty: right.clone() },
                     ]);
                 }
                 (left, right) => match (left.as_unit_product(), right.as_unit_product()) {
@@ -1165,12 +1231,7 @@ impl Expression {
                                         result = Expression::BinaryExpression {
                                             lhs: Box::new(result),
                                             rhs: Box::new(Expression::FunctionCall {
-                                                function: Box::new(
-                                                    Expression::BuiltinFunctionReference(
-                                                        builtin_fn.clone(),
-                                                        Some(node.to_source_location()),
-                                                    ),
-                                                ),
+                                                function: Callable::Builtin(builtin_fn.clone()),
                                                 arguments: vec![],
                                                 source_location: Some(node.to_source_location()),
                                             }),
@@ -1232,23 +1293,21 @@ impl Expression {
                 if let Some(t) = fields.remove(f) {
                     new_values.insert(f.clone(), v.clone().maybe_convert_to(t, node, diag));
                 } else {
-                    diag.push_error(format!("Cannot convert {} to {}", ty, target_type), node);
+                    diag.push_error(format!("Cannot convert {ty} to {target_type}"), node);
                     return self;
                 }
             }
             for (f, t) in fields {
                 new_values.insert(f, Expression::default_value_for_type(&t));
             }
-            Expression::Struct { ty: target_type, values: new_values }
+            Expression::Struct { ty: struct_type.clone(), values: new_values }
         } else {
-            let mut message = format!("Cannot convert {} to {}", ty, target_type);
+            let mut message = format!("Cannot convert {ty} to {target_type}");
             // Explicit error message for unit conversion
             if let Some(from_unit) = ty.default_unit() {
                 if matches!(&target_type, Type::Int32 | Type::Float32 | Type::String) {
-                    message = format!(
-                        "{}. Divide by 1{} to convert to a plain number",
-                        message, from_unit
-                    );
+                    message =
+                        format!("{message}. Divide by 1{from_unit} to convert to a plain number");
                 }
             } else if let Some(to_unit) = target_type.default_unit() {
                 if matches!(ty, Type::Int32 | Type::Float32) {
@@ -1259,8 +1318,7 @@ impl Expression {
                         }
                     }
                     message = format!(
-                        "{}. Use an unit, or multiply by 1{} to convert explicitly",
-                        message, to_unit
+                        "{message}. Use an unit, or multiply by 1{to_unit} to convert explicitly"
                     );
                 }
             }
@@ -1304,7 +1362,7 @@ impl Expression {
                 Expression::Array { element_ty: (**element_ty).clone(), values: vec![] }
             }
             Type::Struct(s) => Expression::Struct {
-                ty: ty.clone(),
+                ty: s.clone(),
                 values: s
                     .fields
                     .iter()
@@ -1351,7 +1409,7 @@ impl Expression {
                         .property_analysis
                         .borrow()
                         .get(nr.name())
-                        .map_or(false, |d| d.is_linked_to_read_only)
+                        .is_some_and(|d| d.is_linked_to_read_only)
                     {
                         true
                     } else if ctx.is_legacy_component() {
@@ -1386,6 +1444,14 @@ impl Expression {
                 ctx.diag.push_error(format!("{what} needs to be done on a property"), node);
                 false
             }
+        }
+    }
+
+    /// Unwrap DebugHook expressions to their contained sub-expression
+    pub fn ignore_debug_hooks(&self) -> &Expression {
+        match self {
+            Expression::DebugHook { expression, .. } => expression.as_ref(),
+            _ => self,
         }
     }
 }
@@ -1564,21 +1630,12 @@ pub enum ImageReference {
 pub fn pretty_print(f: &mut dyn std::fmt::Write, expression: &Expression) -> std::fmt::Result {
     match expression {
         Expression::Invalid => write!(f, "<invalid>"),
-        Expression::Uncompiled(u) => write!(f, "{:?}", u),
-        Expression::StringLiteral(s) => write!(f, "{:?}", s),
-        Expression::NumberLiteral(vl, unit) => write!(f, "{}{}", vl, unit),
-        Expression::BoolLiteral(b) => write!(f, "{:?}", b),
-        Expression::CallbackReference(a, _) => write!(f, "{:?}", a),
-        Expression::PropertyReference(a) => write!(f, "{:?}", a),
-        Expression::FunctionReference(a, _) => write!(f, "{:?}", a),
-        Expression::BuiltinFunctionReference(a, _) => write!(f, "{:?}", a),
-        Expression::MemberFunction { base, base_node: _, member } => {
-            pretty_print(f, base)?;
-            write!(f, ".")?;
-            pretty_print(f, member)
-        }
-        Expression::BuiltinMacroReference(a, _) => write!(f, "{:?}", a),
-        Expression::ElementReference(a) => write!(f, "{:?}", a),
+        Expression::Uncompiled(u) => write!(f, "{u:?}"),
+        Expression::StringLiteral(s) => write!(f, "{s:?}"),
+        Expression::NumberLiteral(vl, unit) => write!(f, "{vl}{unit}"),
+        Expression::BoolLiteral(b) => write!(f, "{b:?}"),
+        Expression::PropertyReference(a) => write!(f, "{a:?}"),
+        Expression::ElementReference(a) => write!(f, "{a:?}"),
         Expression::RepeaterIndexReference { element } => {
             crate::namedreference::pretty_print_element_ref(f, element)
         }
@@ -1586,15 +1643,15 @@ pub fn pretty_print(f: &mut dyn std::fmt::Write, expression: &Expression) -> std
             crate::namedreference::pretty_print_element_ref(f, element)?;
             write!(f, ".@model")
         }
-        Expression::FunctionParameterReference { index, ty: _ } => write!(f, "_arg_{}", index),
+        Expression::FunctionParameterReference { index, ty: _ } => write!(f, "_arg_{index}"),
         Expression::StoreLocalVariable { name, value } => {
-            write!(f, "{} = ", name)?;
+            write!(f, "{name} = ")?;
             pretty_print(f, value)
         }
-        Expression::ReadLocalVariable { name, ty: _ } => write!(f, "{}", name),
+        Expression::ReadLocalVariable { name, ty: _ } => write!(f, "{name}"),
         Expression::StructFieldAccess { base, name } => {
             pretty_print(f, base)?;
-            write!(f, ".{}", name)
+            write!(f, ".{name}")
         }
         Expression::ArrayIndex { array, index } => {
             pretty_print(f, array)?;
@@ -1605,7 +1662,7 @@ pub fn pretty_print(f: &mut dyn std::fmt::Write, expression: &Expression) -> std
         Expression::Cast { from, to } => {
             write!(f, "(")?;
             pretty_print(f, from)?;
-            write!(f, "/* as {} */)", to)
+            write!(f, "/* as {to} */)")
         }
         Expression::CodeBlock(c) => {
             write!(f, "{{ ")?;
@@ -1616,7 +1673,10 @@ pub fn pretty_print(f: &mut dyn std::fmt::Write, expression: &Expression) -> std
             write!(f, "}}")
         }
         Expression::FunctionCall { function, arguments, source_location: _ } => {
-            pretty_print(f, function)?;
+            match function {
+                Callable::Builtin(b) => write!(f, "{b:?}")?,
+                Callable::Callback(nr) | Callable::Function(nr) => write!(f, "{nr:?}")?,
+            }
             write!(f, "(")?;
             for e in arguments {
                 pretty_print(f, e)?;
@@ -1633,17 +1693,17 @@ pub fn pretty_print(f: &mut dyn std::fmt::Write, expression: &Expression) -> std
             write!(f, "(")?;
             pretty_print(f, lhs)?;
             match *op {
-                '=' | '!' => write!(f, " {}= ", op)?,
-                _ => write!(f, " {} ", op)?,
+                '=' | '!' => write!(f, " {op}= ")?,
+                _ => write!(f, " {op} ")?,
             };
             pretty_print(f, rhs)?;
             write!(f, ")")
         }
         Expression::UnaryOp { sub, op } => {
-            write!(f, "{}", op)?;
+            write!(f, "{op}")?;
             pretty_print(f, sub)
         }
-        Expression::ImageReference { resource_ref, .. } => write!(f, "{:?}", resource_ref),
+        Expression::ImageReference { resource_ref, .. } => write!(f, "{resource_ref:?}"),
         Expression::Condition { condition, true_expr, false_expr } => {
             write!(f, "if (")?;
             pretty_print(f, condition)?;
@@ -1664,14 +1724,14 @@ pub fn pretty_print(f: &mut dyn std::fmt::Write, expression: &Expression) -> std
         Expression::Struct { ty: _, values } => {
             write!(f, "{{ ")?;
             for (name, e) in values {
-                write!(f, "{}: ", name)?;
+                write!(f, "{name}: ")?;
                 pretty_print(f, e)?;
                 write!(f, ", ")?;
             }
             write!(f, " }}")
         }
-        Expression::PathData(data) => write!(f, "{:?}", data),
-        Expression::EasingCurve(e) => write!(f, "{:?}", e),
+        Expression::PathData(data) => write!(f, "{data:?}"),
+        Expression::EasingCurve(e) => write!(f, "{e:?}"),
         Expression::LinearGradient { angle, stops } => {
             write!(f, "@linear-gradient(")?;
             pretty_print(f, angle)?;
@@ -1723,5 +1783,10 @@ pub fn pretty_print(f: &mut dyn std::fmt::Write, expression: &Expression) -> std
             write!(f, ")")
         }
         Expression::EmptyComponentFactory => write!(f, "<empty-component-factory>"),
+        Expression::DebugHook { expression, id } => {
+            write!(f, "debug-hook(")?;
+            pretty_print(f, expression)?;
+            write!(f, "\"{id}\")")
+        }
     }
 }

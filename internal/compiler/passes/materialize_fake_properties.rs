@@ -94,19 +94,8 @@ fn should_materialize(
     }
     let has_declared_property = match base_type {
         ElementType::Component(c) => has_declared_property(&c.root_element.borrow(), prop),
-        ElementType::Builtin(b) => {
-            if let Some(p) = b.properties.get(prop) {
-                if b.native_class.lookup_property(prop).is_none() {
-                    return Some(p.ty.clone());
-                }
-                true
-            } else {
-                false
-            }
-        }
-        ElementType::Native(n) => {
-            n.lookup_property(prop).map_or(false, |prop_type| prop_type.is_property_type())
-        }
+        ElementType::Builtin(b) => b.native_class.lookup_property(prop).is_some(),
+        ElementType::Native(n) => n.lookup_property(prop).is_some(),
         ElementType::Global | ElementType::Error => false,
     };
 
@@ -122,6 +111,9 @@ fn should_materialize(
             return Some(Type::Enumeration(
                 crate::typeregister::BUILTIN.with(|e| e.enums.PopupClosePolicy.clone()),
             ));
+        } else {
+            let ty = base_type.lookup_property(prop).property_type.clone();
+            return (ty != Type::Invalid).then_some(ty);
         }
     }
     None
@@ -129,13 +121,13 @@ fn should_materialize(
 
 /// Returns true if the property is declared in this element or parent
 /// (as opposed to being implicitly declared)
-fn has_declared_property(elem: &Element, prop: &str) -> bool {
+pub fn has_declared_property(elem: &Element, prop: &str) -> bool {
     if elem.property_declarations.contains_key(prop) {
         return true;
     }
     match &elem.base_type {
         ElementType::Component(c) => has_declared_property(&c.root_element.borrow(), prop),
-        ElementType::Builtin(b) => b.properties.contains_key(prop),
+        ElementType::Builtin(b) => b.native_class.lookup_property(prop).is_some(),
         ElementType::Native(n) => n.lookup_property(prop).is_some(),
         ElementType::Global | ElementType::Error => false,
     }
@@ -143,9 +135,41 @@ fn has_declared_property(elem: &Element, prop: &str) -> bool {
 
 /// Initialize a sensible default binding for the now materialized property
 pub fn initialize(elem: &ElementRc, name: &str) -> Option<Expression> {
-    if let ElementType::Builtin(b) = &elem.borrow().base_type {
-        if let Some(expr) = b.properties.get(name).and_then(|prop| prop.default_value.expr(elem)) {
-            return Some(expr);
+    let mut base_type = elem.borrow().base_type.clone();
+    loop {
+        base_type = match base_type {
+            ElementType::Component(ref c) => c.root_element.borrow().base_type.clone(),
+            ElementType::Builtin(b) => {
+                match b.properties.get(name).and_then(|prop| prop.default_value.expr(elem)) {
+                    Some(expr) => return Some(expr),
+                    None => break,
+                }
+            }
+            _ => break,
+        };
+    }
+
+    // Hardcode properties for images, because this is a very common call, and this allows
+    // later optimization steps to eliminate these properties.
+    // Note that Rectangles and Empties are similarly optimized in layout_constraint_prop, and
+    // we rely on struct field access simplification for those.
+    if elem.borrow().builtin_type().map_or(false, |n| n.name == "Image") {
+        if elem.borrow().layout_info_prop(Orientation::Horizontal).is_none() {
+            match name {
+                "min-width" => return Some(Expression::NumberLiteral(0., Unit::Px)),
+                "max-width" => return Some(Expression::NumberLiteral(f32::MAX as _, Unit::Px)),
+                "horizontal-stretch" => return Some(Expression::NumberLiteral(0., Unit::None)),
+                _ => {}
+            }
+        }
+
+        if elem.borrow().layout_info_prop(Orientation::Vertical).is_none() {
+            match name {
+                "min-height" => return Some(Expression::NumberLiteral(0., Unit::Px)),
+                "max-height" => return Some(Expression::NumberLiteral(f32::MAX as _, Unit::Px)),
+                "vertical-stretch" => return Some(Expression::NumberLiteral(0., Unit::None)),
+                _ => {}
+            }
         }
     }
 
@@ -154,10 +178,10 @@ pub fn initialize(elem: &ElementRc, name: &str) -> Option<Expression> {
         "min-width" => layout_constraint_prop(elem, "min", Orientation::Horizontal),
         "max-height" => layout_constraint_prop(elem, "max", Orientation::Vertical),
         "max-width" => layout_constraint_prop(elem, "max", Orientation::Horizontal),
-        "preferred-height" => layout_constraint_prop(elem, "preferred", Orientation::Vertical),
-        "preferred-width" => layout_constraint_prop(elem, "preferred", Orientation::Horizontal),
         "horizontal-stretch" => layout_constraint_prop(elem, "stretch", Orientation::Horizontal),
         "vertical-stretch" => layout_constraint_prop(elem, "stretch", Orientation::Vertical),
+        "preferred-height" => layout_constraint_prop(elem, "preferred", Orientation::Vertical),
+        "preferred-width" => layout_constraint_prop(elem, "preferred", Orientation::Horizontal),
         "opacity" => Expression::NumberLiteral(1., Unit::None),
         "visible" => Expression::BoolLiteral(true),
         _ => return None,

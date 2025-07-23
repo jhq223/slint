@@ -16,12 +16,14 @@ export component LineEdit {
     in-out property <string> text <=> base.text;
 
     callback accepted <=> base.accepted;
-    callback rejected <=> base.rejected;
     callback edited <=> base.edited;
+    callback key-pressed <=> base.key-pressed;
+    callback key-released <=> base.key-released;
     accessible-role: text-input;
     accessible-enabled: root.enabled;
     accessible-value <=> text;
     accessible-placeholder-text: text == "" ? placeholder-text : "";
+    accessible-read-only: root.read-only;
     accessible-action-set-value(v) => { text = v; edited(v); }
 
     public function set-selection-offsets(start: int, end: int) {

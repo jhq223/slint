@@ -11,7 +11,7 @@
     "live preview",
     "drag-and-drop editor"
   ],
-  "version": "1.9.0",
+  "version": "1.13.0",
   "publisher": "Slint",
   "icon": "extension-logo.png",
   "license": "GPL-3.0",
@@ -33,6 +33,10 @@
   ],
   "main": "./out/extension.js",
   "browser": "./out/browser.js",
+  "extensionKind": [
+    "workspace",
+    "ui"
+  ],
   "contributes": {
     "languages": [
       {
@@ -55,7 +59,7 @@
       {
         "language": "slint",
         "scopeName": "source.slint",
-        "path": "./slint.tmLanguage.json"
+        "path": "slint.tmLanguage.json"
       },
       {
         "injectTo": [
@@ -110,6 +114,13 @@
           "command": "slint.newProject",
           "when": "!isWeb"
         }
+      ],
+      "editor/title": [
+        {
+          "command": "slint.showPreview",
+          "when": "resourceLangId == slint",
+          "group": "navigation"
+        }
       ]
     },
     "configuration": {
@@ -142,7 +153,7 @@
           "items": {
             "type": "string"
           },
-          "description": "List of paths in which the `import` statement and `@image-url` are looked up"
+          "description": "List of paths in which the `import` statement and `@image-url` are looked up. Relative paths are resolved against the workspace root."
         },
         "slint.libraryPaths": {
           "type": "object",
@@ -151,10 +162,16 @@
               "type": "string"
             }
           },
-          "description": "Map of paths in which the `import` statement for `@library` imports are looked up"
+          "description": "Map of paths in which the `import` statement for `@mylibrary` imports are looked up. This is an object such as `{\"mylibrary\": \"/path/to/library\"}`. Relative paths are resolved against the workspace root."
         }
       }
     },
+    "snippets": [
+      {
+        "language": "slint",
+        "path": "./snippets/slint.json"
+      }
+    ],
     "walkthroughs": [
       {
         "id": "slint.welcomeWalkthrough",
@@ -193,9 +210,6 @@
       }
     ]
   },
-  "files": [
-    "bin/slint-lsp-*"
-  ],
   "scripts": {
     "vscode:prepublish": "pnpm build:wasm_lsp-release && pnpm compile-production && shx echo \"GPL-3.0-only OR LicenseRef-Slint-Software-3.0\" > LICENSE.txt",
     "build:lsp": "cargo build -p slint-lsp",
@@ -204,7 +218,7 @@
     "build:wasm_lsp-release": "shx pwd | xargs -I {} wasm-pack build --release --target web --no-pack ../../tools/lsp --out-dir {}/out -- --no-default-features --features backend-winit,renderer-femtovg,preview",
     "compile": "node ./esbuild.js",
     "compile-production": "node ./esbuild.js --production",
-    "local-package": "shx mkdir -p bin && shx cp ../../target/debug/slint-lsp* bin/ && pnpm dlx vsce package --no-dependencies",
+    "local-package": "shx mkdir -p bin && shx cp ../../target/debug/slint-lsp* bin/ && pnpm dlx @vscode/vsce package --no-dependencies",
     "watch": "tsc -watch -p ./",
     "pretest": "pnpm compile && pnpm check",
     "check": "biome check",
@@ -213,25 +227,25 @@
     "lint": "biome lint",
     "lint:fix": "biome lint --fix",
     "test_grammar": "vscode-tmgrammar-test \"tests/grammar/*.slint\"",
-    "type-check": "tsc --noEmit",
+    "type-check": "tsc --noEmit -p src/tsconfig.json",
     "test": "node ./out/test/runTest.js",
     "clean": "shx rm -rf out bin LICENSE.txt slint-*.vsix"
   },
   "dependencies": {
-    "fs-extra": "11.2.0",
-    "simple-git": "3.27.0",
+    "fs-extra": "11.3.0",
+    "simple-git": "3.28.0",
     "vscode-languageclient": "9.0.1",
     "vscode-languageserver": "9.0.1"
   },
   "devDependencies": {
-    "@biomejs/biome": "1.9.4",
+    "@biomejs/biome": "2.1.2",
     "@rauschma/env-var": "1.0.1",
     "@types/fs-extra": "11.0.4",
     "@types/node": "18.11.9",
     "@types/vscode": "1.82.0",
-    "esbuild": "0.24.0",
-    "shx": "0.3.4",
-    "typescript": "5.6.2",
+    "esbuild": "0.25.8",
+    "shx": "0.4.0",
+    "typescript": "5.8.3",
     "vscode-tmgrammar-test": "0.1.3"
   }
 }

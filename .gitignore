@@ -9,8 +9,8 @@ node_modules
 /_deps
 .DS_Store
 Pipfile.lock
-/docs/src/content/collections/enums/
-/docs/src/content/collections/structs/
+/docs/astro/src/content/collections/enums/
+/docs/astro/src/content/collections/structs/
 /playwright-report
 
 # Ignore all package-lock.json files
@@ -18,9 +18,16 @@ Pipfile.lock
 # But keep these specific ones
 !editors/vscode/package-lock.json
 
+# MISE local files:
+/.mise.local.toml
+/.mise/tasks/local/
+
+
 *.node
 *.d.ts
 
-.env
-.envrc
 __pycache__
+uv.lock
+.python-version
+
+MODULE.bazel.lock

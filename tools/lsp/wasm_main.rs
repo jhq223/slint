@@ -7,7 +7,6 @@
 pub mod common;
 mod fmt;
 mod language;
-pub mod lsp_ext;
 #[cfg(feature = "preview-engine")]
 mod preview;
 pub mod util;
@@ -271,13 +270,6 @@ impl SlintServer {
         };
 
         match message {
-            M::Status { message, health } => {
-                crate::common::lsp_to_editor::send_status_notification(
-                    &self.ctx.server_notifier,
-                    &message,
-                    health,
-                );
-            }
             M::Diagnostics { diagnostics, version, uri } => {
                 crate::common::lsp_to_editor::notify_lsp_diagnostics(
                     &self.ctx.server_notifier,
@@ -286,11 +278,11 @@ impl SlintServer {
                     diagnostics,
                 );
             }
-            M::ShowDocument { file, selection, take_focus } => {
+            M::ShowDocument { file, selection, .. } => {
                 let sn = self.ctx.server_notifier.clone();
                 wasm_bindgen_futures::spawn_local(async move {
                     crate::common::lsp_to_editor::send_show_document_to_editor(
-                        sn, file, selection, take_focus,
+                        sn, file, selection, true,
                     )
                     .await
                 });
@@ -309,6 +301,14 @@ impl SlintServer {
                     .ctx
                     .server_notifier
                     .send_notification::<lsp_types::notification::ShowMessage>(message);
+            }
+            M::TelemetryEvent(object) => {
+                let _ = self
+                    .ctx
+                    .server_notifier
+                    .send_notification::<lsp_types::notification::TelemetryEvent>(
+                        lsp_types::OneOf::Left(object),
+                    );
             }
         }
         Ok(())
@@ -331,14 +331,15 @@ impl SlintServer {
     }
 
     #[wasm_bindgen]
-    pub fn trigger_file_watcher(&self, url: JsValue) -> js_sys::Promise {
+    pub fn trigger_file_watcher(&self, url: JsValue, typ: JsValue) -> js_sys::Promise {
         let ctx = self.ctx.clone();
         let guard = self.reentry_guard.clone();
 
         wasm_bindgen_futures::future_to_promise(async move {
             let _lock = ReentryGuard::lock(guard).await;
             let url: lsp_types::Url = serde_wasm_bindgen::from_value(url)?;
-            language::trigger_file_watcher(&ctx, url)
+            let typ: lsp_types::FileChangeType = serde_wasm_bindgen::from_value(typ)?;
+            language::trigger_file_watcher(&ctx, url, typ)
                 .await
                 .map_err(|e| JsError::new(&e.to_string()))?;
             Ok(JsValue::UNDEFINED)

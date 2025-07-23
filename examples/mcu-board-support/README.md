@@ -17,6 +17,9 @@ The main.rs will look something like this
 #![cfg_attr(not(feature = "simulator"), no_main)]
 slint::include_modules!();
 
+#[allow(unused_imports)]
+use mcu_board_support::prelude::*;
+
 #[mcu_board_support::entry]
 fn main() -> ! {
     mcu_board_support::init();
@@ -74,6 +77,28 @@ udisksctl mount -b /dev/sda1
 elf2uf2-rs -d target/thumbv6m-none-eabi/release/printerdemo_mcu
 ```
 
+### On the Raspberry Pi Pico2
+
+Build the demo with:
+
+```sh
+cargo build -p printerdemo_mcu --no-default-features --features=mcu-board-support/pico2-st7789 --target=thumbv8m.main-none-eabihf --release
+```
+
+The resulting file can be flashed conveniently with [picotool](https://github.com/raspberrypi/picotool). You should build it from source.
+
+Then upload the demo to the Raspberry Pi Pico: push the "bootsel" white button on the device while connecting the
+micro-usb cable to the device, this connects some USB storage on your workstation where you can store the binary.
+
+Or from the command on linux (connect the device while pressing the "bootsel" button):
+
+```sh
+# If you're on Linux: mount the device
+udisksctl mount -b /dev/sda1
+# upload
+picotool load -u -v -x -t elf target/thumbv8m.main-none-eabihf/release/printerdemo_mcu
+```
+
 #### Using probe-rs
 
 This requires [probe-rs](https://probe.rs) and to connect the pico via a probe
@@ -99,7 +124,8 @@ Add this build task to your `.vscode/tasks.json`:
 			"command": "build",
 			"args": [
 				"--package=printerdemo_mcu",
-				"--features=mcu-pico-st7789",
+				"--no-default-features",
+				"--features=mcu-board-support/pico-st7789",
 				"--target=thumbv6m-none-eabi",
 				"--profile=release-with-debug"
 			],
@@ -164,6 +190,15 @@ Using [probe-rs](https://probe.rs).
 CARGO_PROFILE_RELEASE_OPT_LEVEL=s CARGO_TARGET_THUMBV7EM_NONE_EABIHF_RUNNER="probe-rs run --chip STM32H735IGKx" cargo run -p printerdemo_mcu --no-default-features  --features=mcu-board-support/stm32h735g --target=thumbv7em-none-eabihf --release
 ```
 
+### STM32U5G9J-DK2
+
+ cargo build -p mcu-board-support --target=thumbv8m.main-none-eabihf --features stm32u5g9j-dk2 --no-default-features
+Using [probe-rs](https://probe.rs).
+
+```sh
+CARGO_PROFILE_RELEASE_OPT_LEVEL=s CARGO_TARGET_THUMBV8M_MAIN_NONE_EABIHF_RUNNER="probe-rs run --chip STM32U5G9ZJTxQ" cargo run -p printerdemo_mcu --no-default-features  --features=mcu-board-support/stm32u5g9j-dk2 --target=thumbv8m.main-none-eabihf --release
+```
+
 ### ESP32
 
 #### Prerequisites
@@ -174,21 +209,44 @@ CARGO_PROFILE_RELEASE_OPT_LEVEL=s CARGO_TARGET_THUMBV7EM_NONE_EABIHF_RUNNER="pro
 When flashing, with `esplash`, you will be prompted to select a USB port. If this port is always the same, then you can also pass it as a parameter on the command line to avoid the prompt. For example if
 `/dev/ttyUSB1` is the device file for your port, the command line changes to `espflash --monitor /dev/ttyUSB1 path/to/binary/to/flash_and_monitor`.
 
-#### ESP32-S2-Kaluga-1
-
-
-To compile and run the demo:
-
-```sh
-CARGO_PROFILE_RELEASE_OPT_LEVEL=s cargo +esp run -p printerdemo_mcu --target xtensa-esp32s2-none-elf --no-default-features --features=mcu-board-support/esp32-s2-kaluga-1 --release --config examples/mcu-board-support/esp32_s2_kaluga_1/cargo-config.toml
-```
-
-The device needs to be connected with the two USB cables (one for power, one for data)
-
 #### ESP32-S3-Box
 
+The ESP32-S3-Box development board features:
+- 2.4" LCD display with 320x240 resolution
+- ILI9486 display controller
+- GT911 capacitive touch controller
+- ESP32-S3 with built-in WiFi and Bluetooth
+
 To compile and run the demo:
 
 ```sh
-CARGO_PROFILE_RELEASE_OPT_LEVEL=s cargo +esp run -p printerdemo_mcu --target xtensa-esp32s3-none-elf --no-default-features --features=mcu-board-support/esp32-s3-box --release --config examples/mcu-board-support/esp32_s3_box/cargo-config.toml
+CARGO_PROFILE_RELEASE_OPT_LEVEL=s cargo +esp run -p printerdemo_mcu --target xtensa-esp32s3-none-elf --no-default-features --features=mcu-board-support/esp32-s3-box-3 --release --config examples/mcu-board-support/esp32_s3_box_3/cargo-config.toml
+```
+
+#### ESP32-S3-LCD-EV-Board
+
+The ESP32-S3-LCD-EV-Board development board features:
+- 4.3" LCD display with 480x480 resolution
+- RGB interface display
+- FT5x06 capacitive touch controller
+- ESP32-S3 with built-in WiFi and Bluetooth
+
+To compile and run the demo:
+
+```sh
+CARGO_PROFILE_RELEASE_OPT_LEVEL=s cargo +esp run -p printerdemo_mcu --target xtensa-esp32s3-none-elf --no-default-features --features=mcu-board-support/esp32-s3-lcd-ev-board --release --config examples/mcu-board-support/esp32_s3_lcd_ev_board/cargo-config.toml
+```
+
+#### Waveshare ESP32-S3 Touch AMOLED 1.8"
+
+The Waveshare ESP32-S3 Touch AMOLED 1.8" board features:
+- 1.8" AMOLED display with 368x448 resolution
+- SH8601 display controller
+- FT3168 capacitive touch controller (touch support TODO)
+- ESP32-S3 with 16MB flash and 8MB PSRAM
+
+To compile and run the demo:
+
+```sh
+CARGO_PROFILE_RELEASE_OPT_LEVEL=s cargo +esp run -p printerdemo_mcu --target xtensa-esp32s3-none-elf --no-default-features --features=mcu-board-support/waveshare-esp32-s3-touch-amoled-1-8 --release --config examples/mcu-board-support/waveshare_esp32_s3_touch_amoled_1_8/cargo-config.toml
 ```

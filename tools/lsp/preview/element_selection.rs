@@ -8,11 +8,11 @@ use i_slint_compiler::{
     parser::{SyntaxKind, TextSize},
 };
 use i_slint_core::lengths::{LogicalPoint, LogicalRect};
-use slint_interpreter::ComponentInstance;
+use slint_interpreter::{ComponentHandle, ComponentInstance};
 
 use crate::common;
 
-use super::{ext::ElementRcNodeExt, ui};
+use crate::preview::{ext::ElementRcNodeExt, ui, SelectionNotification};
 
 #[derive(Clone, Debug)]
 pub struct ElementSelection {
@@ -81,22 +81,25 @@ fn element_covers_point(
     component_instance: &ComponentInstance,
     selected_element: &ElementRc,
 ) -> Option<LogicalRect> {
-    component_instance
-        .element_positions(selected_element)
-        .iter()
-        .find(|p| p.contains(position))
-        .copied()
+    slint_interpreter::highlight::element_positions(
+        &component_instance.clone_strong().into(),
+        selected_element,
+        slint_interpreter::highlight::ElementPositionFilter::ExcludeClipped,
+    )
+    .iter()
+    .find(|p| p.contains(position))
+    .copied()
 }
 
 pub fn unselect_element() {
-    super::set_selected_element(None, &[], false);
+    super::set_selected_element(None, &[], SelectionNotification::Never);
 }
 
 pub fn select_element_at_source_code_position(
     path: PathBuf,
     offset: TextSize,
     position: Option<LogicalPoint>,
-    notify_editor_about_selection_after_update: bool,
+    editor_notification: crate::preview::SelectionNotification,
 ) {
     let Some(component_instance) = super::component_instance() else {
         return;
@@ -106,7 +109,7 @@ pub fn select_element_at_source_code_position(
         path,
         offset,
         position,
-        notify_editor_about_selection_after_update,
+        editor_notification,
     )
 }
 
@@ -115,7 +118,7 @@ fn select_element_at_source_code_position_impl(
     path: PathBuf,
     offset: TextSize,
     position: Option<LogicalPoint>,
-    notify_editor_about_selection_after_update: bool,
+    editor_notification: SelectionNotification,
 ) {
     let positions = component_instance.component_positions(&path, offset.into());
 
@@ -126,7 +129,7 @@ fn select_element_at_source_code_position_impl(
     super::set_selected_element(
         Some(ElementSelection { path, offset, instance_index }),
         &positions,
-        notify_editor_about_selection_after_update,
+        editor_notification,
     );
 }
 
@@ -142,7 +145,7 @@ fn select_element_node(
         path,
         offset,
         position,
-        false, // We update directly;-)
+        SelectionNotification::Never, // We update directly;-)
     );
 
     if let Some(document_position) = lsp_element_node_position(selected_element) {
@@ -157,13 +160,8 @@ pub fn root_element(component_instance: &ComponentInstance) -> ElementRc {
         // The root element has no debug set if it is a window inserted by the compiler.
         // That window will have one child -- the "real root", but it might
         // have a few more compiler-generated nodes in front or behind the "real root"!
-        let child = root_element
-            .borrow()
-            .children
-            .iter()
-            .filter(|c| !c.borrow().debug.is_empty())
-            .next()
-            .cloned();
+        let child =
+            root_element.borrow().children.iter().find(|c| !c.borrow().debug.is_empty()).cloned();
         child.unwrap_or(root_element)
     } else {
         root_element
@@ -208,7 +206,7 @@ fn collect_all_element_nodes_covering_impl(
         collect_all_element_nodes_covering_impl(position, component_instance, c, result);
     }
 
-    if let Some(geometry) = element_covers_point(position, component_instance, &current_element) {
+    if let Some(geometry) = element_covers_point(position, component_instance, current_element) {
         for (i, d) in ce.borrow().debug.iter().enumerate().rev() {
             if !common::is_element_node_ignored(&d.node)
                 && !d.node.source_file.path().starts_with("builtin:/")
@@ -218,14 +216,14 @@ fn collect_all_element_nodes_covering_impl(
                     element: ce.clone(),
                     debug_index: i,
                     is_in_root_component: false,
-                    geometry: geometry.clone(),
+                    geometry,
                 });
             }
         }
     }
 }
 
-fn assign_is_in_root_component(candidates: &mut Vec<SelectionCandidate>) {
+fn assign_is_in_root_component(candidates: &mut [SelectionCandidate]) {
     let mut root_text_range: Option<i_slint_compiler::parser::TextRange> = None;
     for sc in candidates.iter_mut().rev() {
         let Some(en) = sc.as_element_node() else {
@@ -334,8 +332,9 @@ pub fn selection_stack_at(
                         selected.as_ref() == Some(&en)
                     };
 
-                    let (type_name, id, is_layout) = en.with_element_debug(|el, layout| {
-                        let id = el
+                    let (type_name, id, is_layout) = en.with_element_debug(|di| {
+                        let id = di
+                            .node
                             .parent()
                             .and_then(|p| {
                                 if p.kind() == SyntaxKind::SubElement {
@@ -348,7 +347,8 @@ pub fn selection_stack_at(
                             .unwrap_or_default();
 
                         let type_name = {
-                            el.parent()
+                            di.node
+                                .parent()
                                 .and_then(|p| {
                                     if p.kind() == SyntaxKind::Component {
                                         p.child_node(SyntaxKind::DeclaredIdentifier)
@@ -358,7 +358,8 @@ pub fn selection_stack_at(
                                     }
                                 })
                                 .or_else(|| {
-                                    el.QualifiedName()
+                                    di.node
+                                        .QualifiedName()
                                         .map(|qn| qn.text().to_string().trim().to_string())
                                 })
                                 .unwrap_or_default()
@@ -366,35 +367,30 @@ pub fn selection_stack_at(
                                 .to_string()
                         };
 
-                        (type_name, id, layout.is_some())
+                        (type_name, id, di.layout.is_some())
                     });
 
                     (type_name, id, is_layout, is_selected, path, offset)
                 })
                 .unwrap_or_default();
 
-            if path.strip_prefix("/@").is_err() {
-                if path != PathBuf::new() {
-                    if longest_path_prefix == PathBuf::new() {
-                        longest_path_prefix = path.clone();
-                    } else {
-                        longest_path_prefix =
-                            std::iter::zip(longest_path_prefix.components(), path.components())
-                                .take_while(|(l, p)| l == p)
-                                .map(|(l, _)| l)
-                                .collect();
-                    }
+            if path.strip_prefix("/@").is_err() && path != PathBuf::new() {
+                if longest_path_prefix == PathBuf::new() {
+                    longest_path_prefix = path.clone();
+                } else {
+                    longest_path_prefix =
+                        std::iter::zip(longest_path_prefix.components(), path.components())
+                            .take_while(|(l, p)| l == p)
+                            .map(|(l, _)| l)
+                            .collect();
                 }
             }
 
-            let width = (sc.geometry.size.width as f32 / root_geometry.size.width as f32) * 100.0;
-            let height =
-                (sc.geometry.size.height as f32 / root_geometry.size.height as f32) * 100.0;
-            let x = ((sc.geometry.origin.x as f32 + root_geometry.origin.x)
-                / root_geometry.size.width as f32)
+            let width = (sc.geometry.size.width / root_geometry.size.width) * 100.0;
+            let height = (sc.geometry.size.height / root_geometry.size.height) * 100.0;
+            let x = ((sc.geometry.origin.x + root_geometry.origin.x) / root_geometry.size.width)
                 * 100.0;
-            let y = ((sc.geometry.origin.y as f32 + root_geometry.origin.y)
-                / root_geometry.size.height as f32)
+            let y = ((sc.geometry.origin.y + root_geometry.origin.y) / root_geometry.size.height)
                 * 100.0;
 
             let is_interactive = known_components
@@ -426,22 +422,64 @@ pub fn selection_stack_at(
         let new_file_name = {
             if let Some(library) = file_name.to_string_lossy().strip_prefix("/@") {
                 format!("@{library:?}")
+            } else if file_name == longest_path_prefix {
+                file_name.file_name().unwrap_or_default().to_string_lossy().to_string()
             } else {
-                if file_name == longest_path_prefix {
-                    file_name.file_name().unwrap_or_default().to_string_lossy().to_string()
-                } else {
-                    file_name
-                        .strip_prefix(&longest_path_prefix)
-                        .unwrap_or(&file_name)
-                        .to_string_lossy()
-                        .to_string()
-                }
+                file_name
+                    .strip_prefix(&longest_path_prefix)
+                    .unwrap_or(&file_name)
+                    .to_string_lossy()
+                    .to_string()
             }
         };
         frame.file_name = new_file_name.into();
     }
 
     Rc::new(slint::VecModel::from(result)).into()
+}
+
+pub fn filter_sort_selection_stack(
+    model: slint::ModelRc<crate::preview::ui::SelectionStackFrame>,
+    filter_text: slint::SharedString,
+    filter: crate::preview::ui::SelectionStackFilter,
+) -> slint::ModelRc<crate::preview::ui::SelectionStackFrame> {
+    use crate::preview::ui::{SelectionStackFilter, SelectionStackFrame};
+    use slint::ModelExt;
+
+    fn filter_fn(frame: &SelectionStackFrame, filter: SelectionStackFilter) -> bool {
+        match filter {
+            SelectionStackFilter::Nothing => false,
+            SelectionStackFilter::Layouts => frame.is_layout,
+            SelectionStackFilter::Interactive => frame.is_interactive,
+            SelectionStackFilter::Others => !frame.is_interactive && !frame.is_layout,
+            SelectionStackFilter::LayoutsAndInteractive => frame.is_layout || frame.is_interactive,
+            SelectionStackFilter::LayoutsAndOthers => frame.is_layout || !frame.is_interactive,
+            SelectionStackFilter::InteractiveAndOthers => frame.is_interactive || !frame.is_layout,
+            SelectionStackFilter::Everything => true,
+        }
+    }
+
+    let filter_text = filter_text.to_string();
+
+    if filter_text.is_empty() && filter == SelectionStackFilter::Everything {
+        model
+    } else if filter_text.as_str().chars().any(|c| !c.is_lowercase()) {
+        Rc::new(model.filter(move |frame| {
+            filter_fn(frame, filter)
+                && (frame.id.contains(&filter_text)
+                    || frame.type_name.contains(&filter_text)
+                    || frame.file_name.contains(&filter_text))
+        }))
+        .into()
+    } else {
+        Rc::new(model.filter(move |frame| {
+            filter_fn(frame, filter)
+                && (frame.id.to_lowercase().contains(&filter_text)
+                    || frame.type_name.to_lowercase().contains(&filter_text)
+                    || frame.file_name.to_lowercase().contains(&filter_text))
+        }))
+        .into()
+    }
 }
 
 pub fn parent_layout_kind(element: &common::ElementRcNode) -> ui::LayoutKind {
@@ -456,7 +494,9 @@ fn filter_nodes_for_selection(
         return None;
     }
 
-    selection_candidate.as_element_node()
+    selection_candidate.as_element_node().filter(|en| {
+        en.with_element_node(|n| n.parent().is_none_or(|p| p.kind() != SyntaxKind::Component))
+    })
 }
 
 pub fn select_element_behind_impl(
@@ -523,7 +563,7 @@ pub fn select_element_behind(x: f32, y: f32, enter_component: bool, reverse: boo
 // Called from UI thread!
 pub fn reselect_element() {
     let Some(selected) = super::selected_element() else {
-        super::set_selected_element(None, &[], false);
+        super::set_selected_element(None, &[], SelectionNotification::Never);
         return;
     };
     let Some(component_instance) = super::component_instance() else {
@@ -531,7 +571,7 @@ pub fn reselect_element() {
     };
     let positions = component_instance.component_positions(&selected.path, selected.offset.into());
 
-    super::set_selected_element(Some(selected), &positions, false);
+    super::set_selected_element(Some(selected), &positions, SelectionNotification::Never);
 }
 
 #[cfg(test)]
@@ -645,7 +685,7 @@ export component Entry inherits Main { /* @lsp:ignore-node */ } // 401
             false,
         )
         .unwrap();
-        assert_eq!(&select.path_and_offset(), covers_center.get(0).unwrap());
+        assert_eq!(&select.path_and_offset(), covers_center.first().unwrap());
 
         // Try to move towards the viewer:
         assert!(super::select_element_behind_impl(
@@ -685,15 +725,6 @@ export component Entry inherits Main { /* @lsp:ignore-node */ } // 401
         )
         .unwrap();
         assert_eq!(&next.path_and_offset(), covers_center.get(4).unwrap());
-        let next = super::select_element_behind_impl(
-            &component_instance,
-            &next,
-            LogicalPoint::new(100.0, 100.0),
-            false,
-            false,
-        )
-        .unwrap();
-        assert_eq!(&next.path_and_offset(), covers_center.get(5).unwrap());
 
         assert!(super::select_element_behind_impl(
             &component_instance,
@@ -708,16 +739,6 @@ export component Entry inherits Main { /* @lsp:ignore-node */ } // 401
         let prev = super::select_element_behind_impl(
             &component_instance,
             &next,
-            LogicalPoint::new(100.0, 100.0),
-            false,
-            true,
-        )
-        .unwrap();
-        assert_eq!(&prev.path_and_offset(), covers_center.get(4).unwrap());
-
-        let prev = super::select_element_behind_impl(
-            &component_instance,
-            &prev,
             LogicalPoint::new(100.0, 100.0),
             false,
             true,
@@ -741,7 +762,7 @@ export component Entry inherits Main { /* @lsp:ignore-node */ } // 401
             true,
         )
         .unwrap();
-        assert_eq!(&prev.path_and_offset(), covers_center.get(0).unwrap());
+        assert_eq!(&prev.path_and_offset(), covers_center.first().unwrap());
 
         // Select with crossing component boundaries
         // --------------------------------------------------------------------
@@ -751,21 +772,12 @@ export component Entry inherits Main { /* @lsp:ignore-node */ } // 401
             true,
         )
         .unwrap();
-        assert_eq!(&select.path_and_offset(), covers_center.get(0).unwrap());
+        assert_eq!(&select.path_and_offset(), covers_center.first().unwrap());
 
         // Move deeper into the image:
         let next = super::select_element_behind_impl(
             &component_instance,
             &select,
-            LogicalPoint::new(100.0, 100.0),
-            true,
-            false,
-        )
-        .unwrap();
-        assert_eq!(&next.path_and_offset(), covers_center.get(1).unwrap());
-        let next = super::select_element_behind_impl(
-            &component_instance,
-            &next,
             LogicalPoint::new(100.0, 100.0),
             true,
             false,
@@ -790,15 +802,6 @@ export component Entry inherits Main { /* @lsp:ignore-node */ } // 401
         )
         .unwrap();
         assert_eq!(&next.path_and_offset(), covers_center.get(4).unwrap());
-        let next = super::select_element_behind_impl(
-            &component_instance,
-            &next,
-            LogicalPoint::new(100.0, 100.0),
-            true,
-            false,
-        )
-        .unwrap();
-        assert_eq!(&next.path_and_offset(), covers_center.get(5).unwrap());
 
         assert!(super::select_element_behind_impl(
             &component_instance,
@@ -813,15 +816,6 @@ export component Entry inherits Main { /* @lsp:ignore-node */ } // 401
         let prev = super::select_element_behind_impl(
             &component_instance,
             &next,
-            LogicalPoint::new(100.0, 100.0),
-            true,
-            true,
-        )
-        .unwrap();
-        assert_eq!(&prev.path_and_offset(), covers_center.get(4).unwrap());
-        let prev = super::select_element_behind_impl(
-            &component_instance,
-            &prev,
             LogicalPoint::new(100.0, 100.0),
             true,
             true,
@@ -845,16 +839,7 @@ export component Entry inherits Main { /* @lsp:ignore-node */ } // 401
             true,
         )
         .unwrap();
-        assert_eq!(&prev.path_and_offset(), covers_center.get(1).unwrap());
-        let prev = super::select_element_behind_impl(
-            &component_instance,
-            &prev,
-            LogicalPoint::new(100.0, 100.0),
-            true,
-            true,
-        )
-        .unwrap();
-        assert_eq!(&prev.path_and_offset(), covers_center.get(0).unwrap());
+        assert_eq!(&prev.path_and_offset(), covers_center.first().unwrap());
 
         assert!(super::select_element_behind_impl(
             &component_instance,

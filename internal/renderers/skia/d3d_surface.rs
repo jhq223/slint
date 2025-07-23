@@ -1,11 +1,12 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
-use i_slint_core::api::{OpenGLAPI, PhysicalSize as PhysicalWindowSize, Window};
+use i_slint_core::api::{PhysicalSize as PhysicalWindowSize, Window};
+use i_slint_core::graphics::RequestedGraphicsAPI;
 use i_slint_core::item_rendering::DirtyRegion;
 use i_slint_core::platform::PlatformError;
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::Arc;
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_STANDARD_MULTISAMPLE_QUALITY_PATTERN;
@@ -23,6 +24,8 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObjectEx, INFINITE};
+
+use crate::SkiaSharedContext;
 
 trait MapToPlatformError<T> {
     fn map_platform_error(self, msg: &str) -> std::result::Result<T, PlatformError>;
@@ -254,11 +257,18 @@ pub struct D3DSurface {
 
 impl super::Surface for D3DSurface {
     fn new(
-        window_handle: Rc<dyn raw_window_handle::HasWindowHandle>,
-        _display_handle: Rc<dyn raw_window_handle::HasDisplayHandle>,
+        _shared_context: &SkiaSharedContext,
+        window_handle: Arc<dyn raw_window_handle::HasWindowHandle>,
+        _display_handle: Arc<dyn raw_window_handle::HasDisplayHandle>,
         size: PhysicalWindowSize,
-        _opengl_api: Option<OpenGLAPI>,
+        requested_graphics_api: Option<RequestedGraphicsAPI>,
     ) -> Result<Self, i_slint_core::platform::PlatformError> {
+        if requested_graphics_api
+            .map_or(false, |api| !matches!(api, RequestedGraphicsAPI::Direct3D))
+        {
+            return Err(format!("Requested non-Direct3D rendering with Direct3D renderer").into());
+        }
+
         let factory_flags = 0;
         /*
         let factory_flags = dxgi1_3::DXGI_CREATE_FACTORY_DEBUG;

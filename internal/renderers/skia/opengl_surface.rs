@@ -1,9 +1,8 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
-use std::cell::RefCell;
 use std::num::NonZeroU32;
-use std::rc::Rc;
+use std::{cell::RefCell, sync::Arc};
 
 use glutin::{
     config::GetGlConfig,
@@ -12,12 +11,12 @@ use glutin::{
     prelude::*,
     surface::{SurfaceAttributesBuilder, WindowSurface},
 };
-use i_slint_core::api::{PhysicalSize as PhysicalWindowSize, Window};
-use i_slint_core::{
-    api::{APIVersion, GraphicsAPI},
-    platform::PlatformError,
-};
-use i_slint_core::{item_rendering::DirtyRegion, OpenGLAPI};
+use i_slint_core::api::{GraphicsAPI, PhysicalSize as PhysicalWindowSize, Window};
+use i_slint_core::graphics::{BorrowedOpenGLTexture, RequestedGraphicsAPI, RequestedOpenGLVersion};
+use i_slint_core::item_rendering::DirtyRegion;
+use i_slint_core::platform::PlatformError;
+
+use crate::SkiaSharedContext;
 
 /// This surface type renders into the given window with OpenGL, using glutin and glow libraries.
 pub struct OpenGLSurface {
@@ -30,16 +29,17 @@ pub struct OpenGLSurface {
 
 impl super::Surface for OpenGLSurface {
     fn new(
-        window_handle: Rc<dyn raw_window_handle::HasWindowHandle>,
-        display_handle: Rc<dyn raw_window_handle::HasDisplayHandle>,
+        _shared_context: &SkiaSharedContext,
+        window_handle: Arc<dyn raw_window_handle::HasWindowHandle>,
+        display_handle: Arc<dyn raw_window_handle::HasDisplayHandle>,
         size: PhysicalWindowSize,
-        opengl_api: Option<OpenGLAPI>,
+        requested_graphics_api: Option<RequestedGraphicsAPI>,
     ) -> Result<Self, PlatformError> {
         Self::new_with_config(
             window_handle,
             display_handle,
             size,
-            opengl_api,
+            requested_graphics_api.map(TryInto::try_into).transpose()?,
             glutin::config::ConfigTemplateBuilder::new(),
             None,
         )
@@ -98,7 +98,7 @@ impl super::Surface for OpenGLSurface {
             if width != surface.width() || height != surface.height() {
                 *surface = Self::create_internal_surface(
                     self.fb_info,
-                    &current_context,
+                    current_context,
                     gr_context,
                     width,
                     height,
@@ -120,7 +120,7 @@ impl super::Surface for OpenGLSurface {
             pre_present_callback();
         }
 
-        self.glutin_surface.swap_buffers(&current_context).map_err(|glutin_error| {
+        self.glutin_surface.swap_buffers(current_context).map_err(|glutin_error| {
             format!("Skia OpenGL Renderer: Error swapping buffers: {glutin_error}").into()
         })
     }
@@ -150,14 +150,52 @@ impl super::Surface for OpenGLSurface {
         };
         Ok(rgb_bits + config.alpha_size())
     }
+
+    fn import_opengl_texture(
+        &self,
+        canvas: &skia_safe::Canvas,
+        BorrowedOpenGLTexture { texture_id, size, origin, .. }: &BorrowedOpenGLTexture,
+    ) -> Option<skia_safe::Image> {
+        unsafe {
+            let mut texture_info = skia_safe::gpu::gl::TextureInfo::from_target_and_id(
+                glow::TEXTURE_2D,
+                texture_id.get(),
+            );
+            texture_info.format = glow::RGBA8;
+            let backend_texture = skia_safe::gpu::backend_textures::make_gl(
+                (size.width as _, size.height as _),
+                skia_safe::gpu::Mipmapped::No,
+                texture_info,
+                "Borrowed GL texture",
+            );
+            skia_safe::image::Image::from_texture(
+                canvas.recording_context().as_mut().unwrap(),
+                &backend_texture,
+                match origin {
+                    i_slint_core::graphics::BorrowedOpenGLTextureOrigin::TopLeft => {
+                        skia_safe::gpu::SurfaceOrigin::TopLeft
+                    }
+                    i_slint_core::graphics::BorrowedOpenGLTextureOrigin::BottomLeft => {
+                        skia_safe::gpu::SurfaceOrigin::BottomLeft
+                    }
+                    _ => unimplemented!(
+                        "internal error: missing implementation for BorrowedOpenGLTextureOrigin"
+                    ),
+                },
+                skia_safe::ColorType::RGBA8888,
+                skia_safe::AlphaType::Unpremul,
+                None,
+            )
+        }
+    }
 }
 
 impl OpenGLSurface {
     pub fn new_with_config(
-        window_handle: Rc<dyn raw_window_handle::HasWindowHandle>,
-        display_handle: Rc<dyn raw_window_handle::HasDisplayHandle>,
+        window_handle: Arc<dyn raw_window_handle::HasWindowHandle>,
+        display_handle: Arc<dyn raw_window_handle::HasDisplayHandle>,
         size: PhysicalWindowSize,
-        opengl_api: Option<OpenGLAPI>,
+        requested_opengl_version: Option<RequestedOpenGLVersion>,
         config_builder: glutin::config::ConfigTemplateBuilder,
         config_filter: Option<&dyn Fn(&glutin::config::Config) -> bool>,
     ) -> Result<Self, PlatformError> {
@@ -180,7 +218,7 @@ impl OpenGLSurface {
             display_handle,
             width,
             height,
-            opengl_api,
+            requested_opengl_version,
             config_builder,
             config_filter,
         )?;
@@ -199,7 +237,8 @@ impl OpenGLSurface {
 
             skia_safe::gpu::gl::FramebufferInfo {
                 fboid: fboid.try_into().map_err(|_| {
-                    format!("Skia Renderer: Internal error, framebuffer binding returned signed id")
+                    "Skia Renderer: Internal error, framebuffer binding returned signed id"
+                        .to_string()
                 })?,
                 format: skia_safe::gpu::gl::Format::RGBA8.into(),
                 ..Default::default()
@@ -210,12 +249,12 @@ impl OpenGLSurface {
             current_glutin_context.display().get_proc_address(name) as *const _
         })
         .ok_or_else(|| {
-            format!("Skia Renderer: Internal Error: Could not create OpenGL Interface")
+            "Skia Renderer: Internal Error: Could not create OpenGL Interface".to_string()
         })?;
 
         let mut gr_context =
             skia_safe::gpu::direct_contexts::make_gl(gl_interface, None).ok_or_else(|| {
-                format!("Skia Renderer: Internal Error: Could not create Skia Direct Context from GL interface")
+                "Skia Renderer: Internal Error: Could not create Skia Direct Context from GL interface".to_string()
             })?;
 
         let width: i32 = size.width.try_into().map_err(|e| {
@@ -250,7 +289,7 @@ impl OpenGLSurface {
         _display_handle: raw_window_handle::DisplayHandle<'_>,
         width: NonZeroU32,
         height: NonZeroU32,
-        opengl_api: Option<OpenGLAPI>,
+        requested_opengl_version: Option<RequestedOpenGLVersion>,
         config_template_builder: glutin::config::ConfigTemplateBuilder,
         config_filter: Option<&dyn Fn(&glutin::config::Config) -> bool>,
     ) -> Result<
@@ -274,7 +313,7 @@ impl OpenGLSurface {
             glutin::display::Display::new(_display_handle.as_raw(), display_api_preference)
                 .map_err(|glutin_error| {
                     format!(
-                        "Error creating glutin display for native display {:#?}: {}",
+                        "Error creating glutin display for native display {:?}: {}",
                         _display_handle.as_raw(),
                         glutin_error
                     )
@@ -316,23 +355,19 @@ impl OpenGLSurface {
                 .ok_or("Unable to find suitable GL config")?
         };
 
-        let opengl_api =
-            opengl_api.unwrap_or(OpenGLAPI::GLES(Some(APIVersion { major: 3, minor: 0 })));
-        let preferred_context_attributes = match opengl_api {
-            OpenGLAPI::GL(version) => {
-                let version = version.map(|version| glutin::context::Version {
-                    major: version.major,
-                    minor: version.minor,
-                });
+        let requested_opengl_version =
+            requested_opengl_version.unwrap_or(RequestedOpenGLVersion::OpenGLES(Some((3, 0))));
+        let preferred_context_attributes = match requested_opengl_version {
+            RequestedOpenGLVersion::OpenGL(version) => {
+                let version =
+                    version.map(|(major, minor)| glutin::context::Version { major, minor });
                 ContextAttributesBuilder::new()
                     .with_context_api(ContextApi::OpenGl(version))
                     .build(Some(_window_handle.as_raw()))
             }
-            OpenGLAPI::GLES(version) => {
-                let version = version.map(|version| glutin::context::Version {
-                    major: version.major,
-                    minor: version.minor,
-                });
+            RequestedOpenGLVersion::OpenGLES(version) => {
+                let version =
+                    version.map(|(major, minor)| glutin::context::Version { major, minor });
 
                 ContextAttributesBuilder::new()
                     .with_context_api(ContextApi::Gles(version))
@@ -385,10 +420,11 @@ impl OpenGLSurface {
             ..
         }) = _window_handle.as_raw()
         {
-            use cocoa::appkit::NSView;
-            let view_id: cocoa::base::id = ns_view.as_ptr() as *const _ as *mut _;
+            let ns_view: &objc2_app_kit::NSView = unsafe { ns_view.cast().as_ref() };
             unsafe {
-                NSView::setLayerContentsPlacement(view_id, cocoa::appkit::NSViewLayerContentsPlacement::NSViewLayerContentsPlacementTopLeft)
+                ns_view.setLayerContentsPlacement(
+                    objc2_app_kit::NSViewLayerContentsPlacement::TopLeft,
+                );
             }
         }
 
@@ -398,10 +434,11 @@ impl OpenGLSurface {
             .get_proc_address(&std::ffi::CString::new("glCreateShader").unwrap())
             .is_null()
         {
-            return Err(format!(
+            return Err(
                 "Failed to initialize OpenGL driver: Could not locate glCreateShader symbol"
-            )
-            .into());
+                    .to_string()
+                    .into(),
+            );
         }
 
         // Try to default to vsync and ignore if the driver doesn't support it.

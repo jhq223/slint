@@ -10,9 +10,7 @@
 */
 
 #![warn(missing_docs)]
-#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
-#[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 use core::{
     cell::{Cell, RefCell},
@@ -37,18 +35,17 @@ pub enum TimerMode {
     Repeated,
 }
 
-/// Timer is a handle to the timer system that allows triggering a callback to be called
-/// after a specified period of time.
+/// Timer is a handle to the timer system that triggers a callback after a specified
+/// period of time.
 ///
-/// Use [`Timer::start()`] to create a timer that can repeat at frequent interval, or
-/// [`Timer::single_shot`] if you just want to call a function with a delay and do not
-/// need to be able to stop it.
+/// Use [`Timer::start()`] to create a timer that repeatedly triggers a callback, or
+/// [`Timer::single_shot`] to trigger a callback only once.
 ///
 /// The timer will automatically stop when dropped. You must keep the Timer object
 /// around for as long as you want the timer to keep firing.
 ///
-/// The timer can only be used in the thread that runs the Slint event loop.
-/// They will not fire if used in another thread.
+/// Timers can only be used in the thread that runs the Slint event loop. They don't
+/// fire if used in another thread.
 ///
 /// ## Example
 /// ```rust,no_run
@@ -74,8 +71,8 @@ impl Timer {
     ///
     /// Arguments:
     /// * `mode`: The timer mode to apply, i.e. whether to repeatedly fire the timer or just once.
-    /// * `interval`: The duration from now until when the timer should fire. And the period of that timer
-    ///    for [`Repeated`](TimerMode::Repeated) timers.
+    /// * `interval`: The duration from now until when the timer should fire the first time, and subsequently
+    ///    for repeated [`Repeated`](TimerMode::Repeated) timers.
     /// * `callback`: The function to call when the time has been reached or exceeded.
     pub fn start(
         &self,
@@ -83,7 +80,7 @@ impl Timer {
         interval: core::time::Duration,
         callback: impl FnMut() + 'static,
     ) {
-        CURRENT_TIMERS.with(|timers| {
+        let _ = CURRENT_TIMERS.try_with(|timers| {
             let mut timers = timers.borrow_mut();
             let id = timers.start_or_restart_timer(
                 self.id(),
@@ -92,10 +89,10 @@ impl Timer {
                 CallbackVariant::MultiFire(Box::new(callback)),
             );
             self.set_id(Some(id));
-        })
+        });
     }
 
-    /// Starts the timer with the duration, in order for the callback to called when the
+    /// Starts the timer with the duration and the callback to called when the
     /// timer fires. It is fired only once and then deleted.
     ///
     /// Arguments:
@@ -111,7 +108,7 @@ impl Timer {
     /// });
     /// ```
     pub fn single_shot(duration: core::time::Duration, callback: impl FnOnce() + 'static) {
-        CURRENT_TIMERS.with(|timers| {
+        let _ = CURRENT_TIMERS.try_with(|timers| {
             let mut timers = timers.borrow_mut();
             timers.start_or_restart_timer(
                 None,
@@ -119,13 +116,13 @@ impl Timer {
                 duration,
                 CallbackVariant::SingleShot(Box::new(callback)),
             );
-        })
+        });
     }
 
     /// Stops the previously started timer. Does nothing if the timer has never been started.
     pub fn stop(&self) {
         if let Some(id) = self.id() {
-            CURRENT_TIMERS.with(|timers| {
+            let _ = CURRENT_TIMERS.try_with(|timers| {
                 timers.borrow_mut().deactivate_timer(id);
             });
         }
@@ -138,7 +135,7 @@ impl Timer {
     /// Does nothing if the timer was never started.
     pub fn restart(&self) {
         if let Some(id) = self.id() {
-            CURRENT_TIMERS.with(|timers| {
+            let _ = CURRENT_TIMERS.try_with(|timers| {
                 timers.borrow_mut().deactivate_timer(id);
                 timers.borrow_mut().activate_timer(id);
             });
@@ -148,7 +145,9 @@ impl Timer {
     /// Returns true if the timer is running; false otherwise.
     pub fn running(&self) -> bool {
         self.id()
-            .map(|timer_id| CURRENT_TIMERS.with(|timers| timers.borrow().timers[timer_id].running))
+            .and_then(|timer_id| {
+                CURRENT_TIMERS.try_with(|timers| timers.borrow().timers[timer_id].running).ok()
+            })
             .unwrap_or(false)
     }
 
@@ -161,17 +160,18 @@ impl Timer {
     ///    for [`Repeated`](TimerMode::Repeated) timers.
     pub fn set_interval(&self, interval: core::time::Duration) {
         if let Some(id) = self.id() {
-            CURRENT_TIMERS.with(|timers| {
+            let _ = CURRENT_TIMERS.try_with(|timers| {
                 timers.borrow_mut().set_interval(id, interval);
             });
         }
     }
 
-    /// Returns the interval of the timer.
-    /// Returns a duration of 0ms if the timer was never started.
+    /// Returns the interval of the timer. If the timer was never started, the returned duration is 0ms.
     pub fn interval(&self) -> core::time::Duration {
         self.id()
-            .map(|timer_id| CURRENT_TIMERS.with(|timers| timers.borrow().timers[timer_id].duration))
+            .and_then(|timer_id| {
+                CURRENT_TIMERS.try_with(|timers| timers.borrow().timers[timer_id].duration).ok()
+            })
             .unwrap_or_default()
     }
 
@@ -286,7 +286,7 @@ impl TimerList {
                     }
                 }
 
-                for future_timer in timers_not_activated_this_time.into_iter() {
+                for future_timer in timers_not_activated_this_time.iter() {
                     timers.register_active_timer(*future_timer);
                 }
 
@@ -424,10 +424,7 @@ impl TimerList {
     }
 }
 
-#[cfg(all(not(feature = "std"), feature = "unsafe-single-threaded"))]
-use crate::unsafe_single_threaded::thread_local;
-
-thread_local!(static CURRENT_TIMERS : RefCell<TimerList> = RefCell::default());
+crate::thread_local!(static CURRENT_TIMERS : RefCell<TimerList> = RefCell::default());
 
 #[cfg(feature = "ffi")]
 pub(crate) mod ffi {
@@ -461,7 +458,7 @@ pub(crate) mod ffi {
     /// A value of -1 for the timer id means a new timer is to be allocated.
     /// The (new) timer id is returned.
     /// The timer MUST be destroyed with slint_timer_destroy.
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub extern "C" fn slint_timer_start(
         id: usize,
         mode: TimerMode,
@@ -485,7 +482,7 @@ pub(crate) mod ffi {
     }
 
     /// Execute a callback with a delay in millisecond
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub extern "C" fn slint_timer_singleshot(
         delay: u64,
         callback: extern "C" fn(*mut c_void),
@@ -497,7 +494,7 @@ pub(crate) mod ffi {
     }
 
     /// Stop a timer and free its raw data
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub extern "C" fn slint_timer_destroy(id: usize) {
         if id == 0 {
             return;
@@ -507,7 +504,7 @@ pub(crate) mod ffi {
     }
 
     /// Stop a timer
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub extern "C" fn slint_timer_stop(id: usize) {
         if id == 0 {
             return;
@@ -518,7 +515,7 @@ pub(crate) mod ffi {
     }
 
     /// Restart a repeated timer
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub extern "C" fn slint_timer_restart(id: usize) {
         if id == 0 {
             return;
@@ -529,7 +526,7 @@ pub(crate) mod ffi {
     }
 
     /// Returns true if the timer is running; false otherwise.
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub extern "C" fn slint_timer_running(id: usize) -> bool {
         if id == 0 {
             return false;
@@ -541,7 +538,7 @@ pub(crate) mod ffi {
     }
 
     /// Returns the interval in milliseconds. 0 when the timer was never started.
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub extern "C" fn slint_timer_interval(id: usize) -> u64 {
         if id == 0 {
             return 0;
@@ -716,6 +713,9 @@ assert_eq!(state.borrow().timer_200_called, 7015);
 assert_eq!(state.borrow().timer_once_called, 3);
 assert_eq!(state.borrow().timer_500_called, 3006);
 
+state.borrow().timer_200.stop();
+state.borrow().timer_500.stop();
+
 state.borrow_mut().timer_once.restart();
 for _ in 0..4 {
     i_slint_core::tests::slint_mock_elapsed_time(100);
@@ -726,6 +726,12 @@ for _ in 0..4 {
 }
 assert_eq!(state.borrow().timer_once_called, 4);
 
+state.borrow_mut().timer_once.stop();
+i_slint_core::tests::slint_mock_elapsed_time(1000);
+
+assert_eq!(state.borrow().timer_200_called, 7015);
+assert_eq!(state.borrow().timer_once_called, 4);
+assert_eq!(state.borrow().timer_500_called, 3006);
 ```
  */
 #[cfg(doctest)]
@@ -1138,7 +1144,65 @@ assert!(!later_timer.running());
 i_slint_core::tests::slint_mock_elapsed_time(800);
 assert_eq!(later_timer_expiration_count.get(), 0);
 assert!(!later_timer.running());
+i_slint_core::tests::slint_mock_elapsed_time(800);
+i_slint_core::tests::slint_mock_elapsed_time(800);
+assert_eq!(later_timer_expiration_count.get(), 0);
 ```
  */
 #[cfg(doctest)]
 const _STOP_FUTURE_TIMER_DURING_ACTIVATION_OF_EARLIER: () = ();
+
+/**
+ * Test for issue #8897
+```rust
+use slint::TimerMode;
+static DROP_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static CALL1_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static CALL2_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+std::thread::spawn(move || {
+    struct StartTimerInDrop{};
+    impl Drop for StartTimerInDrop {
+        fn drop(&mut self) {
+            DROP_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            slint::Timer::single_shot(std::time::Duration::from_millis(100), move || {
+                println!("Timer fired");
+            });
+            let timer = slint::Timer::default();
+            timer.start(TimerMode::Repeated, std::time::Duration::from_millis(100), move || {
+                println!("fired");
+            });
+            timer.restart();
+            timer.stop();
+        }
+    }
+
+    thread_local! { static START_TIMER_IN_DROP: StartTimerInDrop = StartTimerInDrop {}; }
+    let timer = START_TIMER_IN_DROP.with(|_| { });
+    thread_local! { static TIMER2: slint::Timer = slint::Timer::default(); }
+    TIMER2.with(|timer| {
+        timer.start(TimerMode::Repeated, std::time::Duration::from_millis(100), move || {
+            CALL2_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+    });
+
+
+    i_slint_backend_testing::init_no_event_loop();
+    slint::Timer::single_shot(std::time::Duration::from_millis(100), move || {
+            CALL1_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    i_slint_core::tests::slint_mock_elapsed_time(50);
+
+    assert_eq!(CALL1_COUNT.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(CALL2_COUNT.load(std::sync::atomic::Ordering::SeqCst), 0);
+    i_slint_core::tests::slint_mock_elapsed_time(60);
+    assert_eq!(CALL1_COUNT.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(CALL2_COUNT.load(std::sync::atomic::Ordering::SeqCst), 1);
+    i_slint_core::tests::slint_mock_elapsed_time(60);
+}).join().unwrap();
+assert_eq!(DROP_COUNT.load(std::sync::atomic::Ordering::SeqCst), 1);
+assert_eq!(CALL1_COUNT.load(std::sync::atomic::Ordering::SeqCst), 1);
+assert_eq!(CALL2_COUNT.load(std::sync::atomic::Ordering::SeqCst), 1);
+```
+ */
+#[cfg(doctest)]
+const _TIMER_AT_EXIT: () = ();

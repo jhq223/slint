@@ -4,7 +4,7 @@
 // cSpell: ignore singleshot
 
 #define CATCH_CONFIG_MAIN
-#include "catch2/catch.hpp"
+#include "catch2/catch_all.hpp"
 
 #include <slint-platform.h>
 #include <thread>
@@ -28,7 +28,7 @@ struct TestPlatform : slint::platform::Platform
 #ifdef SLINT_FEATURE_RENDERER_SOFTWARE
         struct TestWindowAdapter : slint::platform::WindowAdapter
         {
-            slint::platform::SoftwareRenderer r { {} };
+            slint::platform::SoftwareRenderer r { { } };
             slint::PhysicalSize size() override { return slint::PhysicalSize({}); }
             slint::platform::AbstractRenderer &renderer() override { return r; }
         };

@@ -103,7 +103,7 @@ impl DemoTexture {
             0,
             glow::RGBA as _,
             glow::UNSIGNED_BYTE as _,
-            None,
+            glow::PixelUnpackData::Slice(None),
         );
 
         let _saved_fbo_binding = ScopedFrameBufferBinding::new(gl, Some(fbo));
@@ -398,11 +398,10 @@ impl DemoRenderer {
 }
 
 fn main() {
-    let platform = slint::platform::PlatformBuilder::new()
-        .with_opengl_api(slint::OpenGLAPI::GLES(None))
-        .build()
+    slint::BackendSelector::new()
+        .require_opengl_es()
+        .select()
         .expect("Unable to create Slint backend with OpenGL ES renderer");
-    slint::platform::set_platform(platform).unwrap();
 
     let app = App::new().unwrap();
 

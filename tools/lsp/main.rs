@@ -10,7 +10,6 @@ compile_error!("Feature preview-engine and preview-builtin need to be enabled to
 mod common;
 mod fmt;
 mod language;
-pub mod lsp_ext;
 #[cfg(feature = "preview-engine")]
 mod preview;
 pub mod util;
@@ -40,6 +39,21 @@ use std::sync::{atomic, Arc, Mutex};
 use std::task::{Poll, Waker};
 
 use crate::common::document_cache::CompilerConfiguration;
+
+#[cfg(not(any(
+    target_os = "windows",
+    target_arch = "wasm32",
+    all(target_arch = "aarch64", target_os = "linux")
+)))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(any(
+    target_os = "windows",
+    target_arch = "wasm32",
+    all(target_arch = "aarch64", target_os = "linux")
+)))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 #[derive(Clone, clap::Parser)]
 #[command(author, version, about, long_about = None)]
@@ -170,6 +184,17 @@ impl ServerNotifier {
     pub fn send_message_to_lsp(&self, message: common::PreviewToLspMessage) {
         let _ = self.preview_to_lsp_sender.send(message);
     }
+
+    #[cfg(test)]
+    pub fn dummy() -> Self {
+        Self {
+            sender: crossbeam_channel::unbounded().0,
+            queue: Default::default(),
+            use_external_preview: Default::default(),
+            #[cfg(feature = "preview-engine")]
+            preview_to_lsp_sender: crossbeam_channel::unbounded().0,
+        }
+    }
 }
 
 impl RequestHandler {
@@ -217,10 +242,17 @@ fn main() {
     }
 
     if let Ok(panic_log_file) = std::env::var("SLINT_LSP_PANIC_LOG") {
+        // The editor may set the `SLINT_LSP_PANIC_LOG` env variable to a path in which we can write the panic log.
+        // It will read that file if our process doesn't exit properly, and will use the content to report the panic via telemetry.
+        // The content of the generated file will be the following:
+        //  - The first line will be the version of slint-lsp
+        //  - The second line will be the location of the panic, in the format `file:line:column`
+        //  - The third line will be bracktrace (in one line)
+        //  - everything that follows is the actual panic message. It can span over multiple lines.
+
         let default_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            let _ =
-                std::path::Path::new(&panic_log_file).parent().map(|x| std::fs::create_dir_all(x));
+            let _ = std::path::Path::new(&panic_log_file).parent().map(std::fs::create_dir_all);
             if let Ok(mut file) = std::fs::File::create(&panic_log_file) {
                 let _ = writeln!(
                     file,
@@ -234,6 +266,7 @@ fn main() {
                 } else {
                     writeln!(file, "unknown location")
                 };
+                let _ = writeln!(file, "{:?}", std::backtrace::Backtrace::force_capture());
                 let _ = writeln!(file, "{info}");
             }
             default_hook(info);
@@ -258,7 +291,7 @@ fn main() {
                 let threads = match run_lsp_server(args) {
                     Ok(threads) => threads,
                     Err(error) => {
-                        eprintln!("Error running LSP server: {}", error);
+                        eprintln!("Error running LSP server: {error}");
                         return;
                     }
                 };
@@ -328,13 +361,17 @@ fn main_loop(connection: Connection, init_param: InitializeParams, cli_args: Cli
             let server_notifier = server_notifier_.clone();
             Box::pin(async move {
                 let contents = std::fs::read_to_string(&path);
-                if let Ok(contents) = &contents {
-                    if let Ok(url) = Url::from_file_path(&path) {
+                if let Ok(url) = Url::from_file_path(&path) {
+                    if let Ok(contents) = &contents {
                         server_notifier.send_message_to_preview(
                             common::LspToPreviewMessage::SetContents {
                                 url: common::VersionedUrl::new(url, None),
                                 contents: contents.clone(),
                             },
+                        )
+                    } else {
+                        server_notifier.send_message_to_preview(
+                            common::LspToPreviewMessage::ForgetFile { url },
                         )
                     }
                 }
@@ -458,7 +495,7 @@ async fn handle_notification(req: lsp_server::Notification, ctx: &Rc<Context>) -
         DidChangeWatchedFiles::METHOD => {
             let params: DidChangeWatchedFilesParams = serde_json::from_value(req.params)?;
             for fe in params.changes {
-                trigger_file_watcher(ctx, fe.uri).await?;
+                trigger_file_watcher(ctx, fe.uri, fe.typ).await?;
             }
             Ok(())
         }
@@ -522,13 +559,6 @@ async fn handle_preview_to_lsp_message(
 ) -> Result<()> {
     use crate::common::PreviewToLspMessage as M;
     match message {
-        M::Status { message, health } => {
-            crate::common::lsp_to_editor::send_status_notification(
-                &ctx.server_notifier,
-                &message,
-                health,
-            );
-        }
         M::Diagnostics { uri, version, diagnostics } => {
             crate::common::lsp_to_editor::notify_lsp_diagnostics(
                 &ctx.server_notifier,
@@ -558,6 +588,11 @@ async fn handle_preview_to_lsp_message(
         M::SendShowMessage { message } => {
             ctx.server_notifier
                 .send_notification::<lsp_types::notification::ShowMessage>(message)?;
+        }
+        M::TelemetryEvent(object) => {
+            ctx.server_notifier.send_notification::<lsp_types::notification::TelemetryEvent>(
+                lsp_types::OneOf::Left(object),
+            )?
         }
     }
     Ok(())

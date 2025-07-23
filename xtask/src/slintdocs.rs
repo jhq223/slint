@@ -15,13 +15,12 @@ pub fn generate() -> Result<(), Box<dyn std::error::Error>> {
 
     let root = super::root_dir();
 
-    let docs_source_dir = root.join("docs");
+    let docs_source_dir = root.join("docs/astro");
 
     {
         let sh = Shell::new()?;
         let _p = sh.push_dir(&docs_source_dir);
         cmd!(sh, "pnpm install --frozen-lockfile --ignore-scripts").run()?;
-        cmd!(sh, "pnpm exec playwright install --with-deps").run()?;
         cmd!(sh, "pnpm run build").run()?;
     }
 
@@ -32,7 +31,7 @@ fn write_individual_enum_files(
     root_dir: &Path,
     enums: &std::collections::BTreeMap<String, EnumDoc>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let enums_dir = root_dir.join("docs/src/content/collections/enums");
+    let enums_dir = root_dir.join("docs/astro/src/content/collections/enums");
     create_dir_all(&enums_dir).context(format!(
         "Failed to create folder holding individual enum doc files {enums_dir:?}"
     ))?;
@@ -110,7 +109,7 @@ pub fn extract_enum_docs() -> std::collections::BTreeMap<String, EnumDoc> {
         i_slint_common::for_each_enums!(gen_enums);
     }
 
-    return enums;
+    enums
 }
 
 pub fn generate_enum_docs() -> Result<(), Box<dyn std::error::Error>> {
@@ -214,8 +213,10 @@ pub fn extract_builtin_structs() -> std::collections::BTreeMap<String, StructDoc
 
     // `StateInfo` should not be in the documentation, so remove it again
     structs.remove("StateInfo");
-    // Experimental type
+    // Internal type
     structs.remove("MenuEntry");
+    // Experimental type
+    structs.remove("DropEvent");
 
     structs
 }
@@ -224,7 +225,7 @@ fn write_individual_struct_files(
     root_dir: &Path,
     structs: std::collections::BTreeMap<String, StructDoc>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let structs_dir = root_dir.join("docs/src/content/collections/structs");
+    let structs_dir = root_dir.join("docs/astro/src/content/collections/structs");
     create_dir_all(&structs_dir).context(format!(
         "Failed to create folder holding individual structs doc files {structs_dir:?}"
     ))?;

@@ -50,6 +50,10 @@ export component TabImpl inherits Rectangle {
     accessible-role: tab;
     accessible-enabled: root.enabled;
     accessible-label: root.title;
+    accessible-item-index: root.tab-index;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.is-current;
+    accessible-action-default => { i-touch-area.clicked(); }
 
     if (root.is-current || i-touch-area.pressed): Rectangle {
         width: 100%;
@@ -94,6 +98,7 @@ export component TabImpl inherits Rectangle {
             font-size: CupertinoFontSettings.body-strong.font-size;
             font-weight: CupertinoFontSettings.body-strong.font-weight;
             color: CupertinoPalette.foreground;
+            accessible-role: none;
         }
     }
 }
@@ -105,6 +110,7 @@ export component TabBarImpl inherits TabBarBase {
 
     accessible-role: tab-list;
     accessible-delegate-focus: root.current-focused >= 0 ? root.current-focused : root.current;
+    accessible-item-count: root.num-tabs;
 
     Rectangle {
         border-radius: 7px;

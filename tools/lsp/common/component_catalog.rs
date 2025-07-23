@@ -22,9 +22,23 @@ fn builtin_component_info(name: &str) -> ComponentInformation {
         _ => vec![],
     };
 
+    let component = {
+        if ["Flickable", "SwipeGestureHandler", "TouchArea"].contains(&name) {
+            "Gestures"
+        } else if ["FocusScope", "TextInput"].contains(&name) {
+            "Keyboard Input"
+        } else if name.ends_with("Layout") {
+            "Basic Layouts"
+        } else if ["Dialog", "PopupWindow", "Window"].contains(&name) {
+            "Window"
+        } else {
+            "Basic Elements"
+        }
+    };
+
     ComponentInformation {
         name: name.to_string(),
-        category: "Builtin Elements".to_string(),
+        category: component.to_string(),
         is_global: false,
         is_builtin: true,
         is_std_widget: false,
@@ -57,7 +71,7 @@ fn std_widgets_info(name: &str, is_global: bool) -> ComponentInformation {
 
     ComponentInformation {
         name: name.to_string(),
-        category: "Widgets".to_string(),
+        category: "Std-Widgets".to_string(),
         is_global,
         is_builtin: false,
         is_std_widget: true,
@@ -112,10 +126,9 @@ fn file_local_component_info(
 pub fn builtin_components(document_cache: &DocumentCache, result: &mut Vec<ComponentInformation>) {
     let registry = document_cache.global_type_registry();
     result.extend(registry.all_elements().iter().filter_map(|(name, ty)| match ty {
-        ElementType::Builtin(b)
-            if !b.is_internal && !b.is_non_item_type && name != "Dialog" && name != "Window" =>
-        {
-            Some(builtin_component_info(name))
+        ElementType::Builtin(b) if !b.is_internal && !b.is_non_item_type => {
+            let info = builtin_component_info(name);
+            (info.category != "Window").then_some(info)
         }
         _ => None,
     }));
@@ -241,12 +254,12 @@ mod tests {
         assert!(result.iter().all(|ci| ci.is_exported));
         assert!(result.iter().all(|ci| ci.is_builtin));
         assert!(result.iter().all(|ci| !ci.is_global));
-        assert!(result.iter().any(|ci| &ci.name == "TouchArea"
-            && ci.is_interactive == true
-            && ci.is_layout == false));
-        assert!(result.iter().any(|ci| &ci.name == "HorizontalLayout"
-            && ci.is_interactive == false
-            && ci.is_layout == true));
+        assert!(result
+            .iter()
+            .any(|ci| &ci.name == "TouchArea" && ci.is_interactive && !ci.is_layout));
+        assert!(result
+            .iter()
+            .any(|ci| &ci.name == "HorizontalLayout" && !ci.is_interactive && ci.is_layout));
         assert!(!result.iter().any(|ci| &ci.name == "AboutSlint"));
         assert!(!result.iter().any(|ci| &ci.name == "ProgressIndicator"));
         assert!(!result.iter().any(|ci| &ci.name == "Timer"));

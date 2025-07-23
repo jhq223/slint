@@ -4,8 +4,7 @@
 // cSpell: ignore resizer
 
 import { Button, ComboBox, HorizontalBox, LineEdit, ListView, Palette, ScrollView, VerticalBox } from "std-widgets.slint";
-import { Api, ComponentItem, Diagnostics, DropMark, LayoutKind, Selection } from "../api.slint";
-import { DiagnosticsOverlay } from "../components/diagnostics-overlay.slint";
+import { Api, ComponentItem, DiagnosticSummary, DropMark, LayoutKind, Selection } from "../api.slint";
 import { Resizer } from "../components/resizer.slint";
 import { Group, GroupHeader } from "../components/group.slint";
 import { SelectionPopup } from "../components/selection-popup.slint";
@@ -26,7 +25,7 @@ export enum DrawAreaMode {
     uninitialized,
     viewing,
     selecting,
-    error,
+    outdated,
 }
 
 component SelectionFrame {
@@ -89,7 +88,7 @@ component SelectionFrame {
 
         changed has-hover => {
             if self.has-hover {
-                StatusLineApi.help-text = @tr("<right-click> show popup, <double-click> select behind element, <{}> ignores component boundaries", Api.control-key-name);
+                StatusLineApi.help-text = @tr("<right-click> show selection popup, <double-click> select behind element, <{}> ignores component boundaries", Api.control-key-name);
             } else {
                 StatusLineApi.help-text = "";
             }
@@ -189,23 +188,31 @@ component SelectionFrame {
 }
 
 export component PreviewView {
-    property <[Diagnostics]> diagnostics <=> Api.diagnostics;
     property <[Selection]> selections <=> Api.selections;
     in property <ComponentItem> visible-component;
+    property <DiagnosticSummary> diagnostic-summary <=> Api.diagnostic-summary;
+    out property <bool> preview-is-current: self.diagnostic-summary != DiagnosticSummary.Errors;
+
     property <DropMark> drop-mark <=> Api.drop-mark;
     property <component-factory> preview-area <=> Api.preview-area;
     in-out property <bool> select-mode: false;
 
-    out property <bool> preview-visible: preview-area-container.has-component && !diagnostics.diagnostics-open;
+    out property <bool> preview-visible: preview-area-container.has-component;
     out property <DrawAreaMode> mode: uninitialized;
-
-    out property <length> preview-area-position-x: preview-area-container.absolute-position.x;
-    out property <length> preview-area-position-y: preview-area-container.absolute-position.y;
-    out property <length> preview-area-width: preview-visible ? preview-area-container.width : 0px;
-    out property <length> preview-area-height: preview-visible ? preview-area-container.height : 0px;
 
     preferred-height: max(max(preview-area-container.preferred-height, preview-area-container.min-height) + 2 * scroll-view.border, 10 * scroll-view.border);
     preferred-width: max(max(preview-area-container.preferred-width, preview-area-container.min-width) + 2 * scroll-view.border, 10 * scroll-view.border);
+
+    changed diagnostic-summary => {
+        if self.diagnostic-summary == DiagnosticSummary.NothingDetected {
+            StatusLineApi.help-text = @tr("");
+        } else if self.diagnostic-summary == DiagnosticSummary.Warnings {
+            StatusLineApi.help-text = @tr("Check your text editor for warnings");
+        }
+        if self.diagnostic-summary == DiagnosticSummary.Errors {
+            StatusLineApi.help-text = @tr("Check your text editor for errors");
+        }
+    }
 
     scroll-view := ScrollView {
         out property <length> border: 30px;
@@ -225,18 +232,34 @@ export component PreviewView {
                 source: @image-url("../assets/background.svg");
                 vertical-tiling: repeat;
                 horizontal-tiling: repeat;
+                vertical-alignment: top;
+                horizontal-alignment: left;
                 colorize: Palette.alternate-background;
             }
 
             unselect-area := TouchArea {
                 clicked => {
                     Api.unselect();
+                    StatusLineApi.help-text = "";
                 }
                 mouse-cursor: root.mode == DrawAreaMode.selecting ? MouseCursor.crosshair : MouseCursor.default;
 
                 changed has-hover => {
-                    StatusLineApi.help-text = "<click> unselect";
+                    if self.has-hover && root.selections.length > 0 {
+                        StatusLineApi.help-text = "<click> unselect";
+                    } else {
+                         StatusLineApi.help-text = "";
+                    }
                 }
+            }
+
+            unselect-area-blocker:= TouchArea {
+                x: content-border.x;
+                y: content-border.y;
+                width: content-border.width;
+                height: content-border.height;
+
+                mouse-cursor: root.mode == DrawAreaMode.selecting ? MouseCursor.crosshair : MouseCursor.default;
             }
 
             content-border := Rectangle {
@@ -280,6 +303,12 @@ export component PreviewView {
                     }
 
                     Api.resize-to-preferred-size = false;
+
+                    if Api.focus-previewed-element {
+                        preview-area-container.focus();
+                    }
+
+                    Api.focus-previewed-element = false;
                 }
 
                 function resize-to-preview-constraints(width: length, height: length) {
@@ -367,16 +396,28 @@ export component PreviewView {
 
                     changed has-hover => {
                         if self.has-hover && self.enabled {
-                            StatusLineApi.help-text = @tr("<click> select element in current component, <{}-click> to select an element in any component", Api.control-key-name);
+                            StatusLineApi.help-text = @tr("<click> select element in current component, <right-click> to select interactively, <{}-click> to select an element in any component", Api.control-key-name);
                         } else {
                             StatusLineApi.help-text = "";
                         }
                     }
                 }
 
+                DropArea {
+                    can-drop(event) => {
+                        if event.mime-type != "application/x-slint-component" {
+                            return false;
+                        }
+                        return Api.can-drop(event.data.to-float(), event.position.x, event.position.y, true);
+                    }
+                    dropped(event) => {
+                        Api.drop(event.data.to-float(), event.position.x, event.position.y);
+                    }
+                }
+
                 selection-popup := SelectionPopup {
-                    preview-width: root.preview-area-width;
-                    preview-height: root.preview-area-height;
+                    preview-width: preview-area-container.width;
+                    preview-height: preview-area-container.height;
                     x: 0px;
                     y: 0px;
                     max-popup-height: root.height * 0.9;
@@ -425,28 +466,17 @@ export component PreviewView {
         }
     }
 
-    // Diagnostics overlay:
-    diagnostics := DiagnosticsOverlay {
-        width: 100%;
-        height: 100%;
-        diagnostics <=> root.diagnostics;
-
-        show-document(url, line, column) => {
-            Api.show-document(url, line, column);
-        }
-    }
-
     states [
         uninitialized when !preview-area-container.has-component: {
             root.mode: DrawAreaMode.uninitialized;
         }
-        error when diagnostics.diagnostics-open && preview-area-container.has-component: {
-            root.mode: DrawAreaMode.error;
+        error when !root.preview-is-current && preview-area-container.has-component: {
+            root.mode: DrawAreaMode.outdated;
         }
-        selecting when root.select-mode && !diagnostics.diagnostics-open && preview-area-container.has-component: {
+        selecting when root.select-mode && root.preview-is-current && preview-area-container.has-component: {
             root.mode: DrawAreaMode.selecting;
         }
-        viewing when !root.select-mode && !diagnostics.diagnostics-open && preview-area-container.has-component: {
+        viewing when !root.select-mode && root.preview-is-current && preview-area-container.has-component: {
             root.mode: DrawAreaMode.viewing;
         }
     ]

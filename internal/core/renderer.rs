@@ -1,7 +1,6 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
-#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use core::pin::Pin;
@@ -116,8 +115,6 @@ pub trait RendererSealed {
     ) -> Result<(), crate::api::SetRenderingNotifierError> {
         Err(crate::api::SetRenderingNotifierError::Unsupported)
     }
-
-    fn default_font_size(&self) -> LogicalLength;
 
     fn set_window_adapter(&self, _window_adapter: &Rc<dyn WindowAdapter>);
 

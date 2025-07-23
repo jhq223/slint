@@ -26,6 +26,10 @@ export component ComboBox {
     forward-focus: base;
     accessible-role: combobox;
     accessible-enabled: root.enabled;
+    accessible-expandable: true;
+    accessible-expanded: base.popup-has-focus;
+    accessible-value <=> root.current-value;
+    accessible-action-expand => { base.show-popup(); }
 
     states [
         disabled when !root.enabled : {
@@ -39,6 +43,9 @@ export component ComboBox {
 
         show-popup => {
             popup.show();
+        }
+        close-popup => {
+            popup.close();
         }
     }
 
@@ -60,6 +67,7 @@ export component ComboBox {
                 font-weight: CosmicFontSettings.body.font-weight;
                 color: CosmicPalette.control-foreground;
                 text: root.current-value;
+                accessible-role: none;
             }
 
             Image {
@@ -68,6 +76,7 @@ export component ComboBox {
                 height: 16px;
                 colorize: CosmicPalette.control-foreground;
                 source: Icons.dropdown;
+                accessible-role: none;
             }
         }
 
@@ -89,27 +98,37 @@ export component ComboBox {
         y: root.height + 4px;
         width: root.width;
         height: root.visible-items * CosmicSizeSettings.item-height  + 2 * root.popup-padding;
+        forward-focus: inner-fs;
 
-        MenuBorder {
-            ScrollView {
-                VerticalLayout {
-                    alignment: start;
-                    padding: root.popup-padding;
+        inner-fs := FocusScope {
+            focus-changed-event => {
+                base.popup-has-focus = self.has-focus;
+            }
+            key-pressed(event) => {
+                return base.popup-key-handler(event);
+            }
 
-                    for value[index] in root.model : ListItem {
-                        item: { text: value };
-                        is-selected: index == root.current-index;
-                        has-hover: touch-area.has-hover;
-                        pressed: touch-area.pressed;
+            MenuBorder {
+                ScrollView {
+                    VerticalLayout {
+                        alignment: start;
+                        padding: root.popup-padding;
 
-                        touch-area := TouchArea {
-                            clicked => {
-                                base.select(index);
+                        for value[index] in root.model : ListItem {
+                            item: { text: value };
+                            is-selected: index == root.current-index;
+                            has-hover: touch-area.has-hover;
+                            pressed: touch-area.pressed;
+
+                            touch-area := TouchArea {
+                                clicked => {
+                                    base.select(index);
+                                }
                             }
                         }
                     }
                 }
-           }
+            }
         }
     }
 }

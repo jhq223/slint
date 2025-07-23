@@ -17,7 +17,17 @@ use super::statements::parse_statement;
 /// ```
 pub fn parse_element(p: &mut impl Parser) -> bool {
     let mut p = p.start_node(SyntaxKind::Element);
-    if !(parse_qualified_name(&mut *p) && p.expect(SyntaxKind::LBrace)) {
+    if !parse_qualified_name(&mut *p) {
+        return if p.test(SyntaxKind::LBrace) {
+            // recover
+            parse_element_content(&mut *p);
+            p.expect(SyntaxKind::RBrace)
+        } else {
+            false
+        };
+    }
+
+    if !p.expect(SyntaxKind::LBrace) {
         return false;
     }
 
@@ -50,7 +60,9 @@ pub fn parse_element_content(p: &mut impl Parser) {
             SyntaxKind::Eof => return,
             SyntaxKind::Identifier => match p.nth(1).kind() {
                 SyntaxKind::Colon => parse_property_binding(&mut *p),
-                SyntaxKind::ColonEqual | SyntaxKind::LBrace => parse_sub_element(&mut *p),
+                SyntaxKind::ColonEqual | SyntaxKind::LBrace => {
+                    had_parse_error |= !parse_sub_element(&mut *p)
+                }
                 SyntaxKind::FatArrow | SyntaxKind::LParent if p.peek().as_str() != "if" => {
                     parse_callback_connection(&mut *p)
                 }
@@ -143,13 +155,13 @@ pub fn parse_element_content(p: &mut impl Parser) {
 /// Bar { x : y ; }
 /// ```
 /// Must consume at least one token
-fn parse_sub_element(p: &mut impl Parser) {
+fn parse_sub_element(p: &mut impl Parser) -> bool {
     let mut p = p.start_node(SyntaxKind::SubElement);
     if p.nth(1).kind() == SyntaxKind::ColonEqual {
         p.expect(SyntaxKind::Identifier);
         p.expect(SyntaxKind::ColonEqual);
     }
-    parse_element(&mut *p);
+    parse_element(&mut *p)
 }
 
 #[cfg_attr(test, parser_test)]
@@ -262,6 +274,8 @@ pub fn parse_code_block(p: &mut impl Parser) {
 #[cfg_attr(test, parser_test)]
 /// ```test,CallbackConnection
 /// clicked => {}
+/// clicked => bar ;
+/// clicked => { foo; } ;
 /// clicked() => { foo; }
 /// mouse_move(x, y) => {}
 /// mouse_move(x, y, ) => { bar; goo; }
@@ -282,7 +296,14 @@ fn parse_callback_connection(p: &mut impl Parser) {
         p.expect(SyntaxKind::RParent);
     }
     p.expect(SyntaxKind::FatArrow);
-    parse_code_block(&mut *p);
+    if p.nth(0).kind() == SyntaxKind::LBrace && p.nth(2).kind() != SyntaxKind::Colon {
+        parse_code_block(&mut *p);
+        p.test(SyntaxKind::Semicolon);
+    } else if parse_expression(&mut *p) {
+        p.expect(SyntaxKind::Semicolon);
+    } else {
+        p.test(SyntaxKind::Semicolon);
+    }
 }
 
 #[cfg_attr(test, parser_test)]
@@ -523,10 +544,10 @@ fn parse_state(p: &mut impl Parser) -> bool {
             SyntaxKind::Eof => return false,
             _ => {
                 if p.nth(1).kind() == SyntaxKind::LBrace
-                    && matches!(p.peek().as_str(), "in" | "out")
+                    && matches!(p.peek().as_str(), "in" | "out" | "in-out" | "in_out")
                 {
                     let mut p = p.start_node(SyntaxKind::Transition);
-                    p.consume(); // "in" or "out"
+                    p.consume(); // "in", "out" or "in-out"
                     p.expect(SyntaxKind::LBrace);
                     if !parse_transition_inner(&mut *p) {
                         return false;
@@ -550,7 +571,7 @@ fn parse_state(p: &mut impl Parser) -> bool {
 #[cfg_attr(test, parser_test)]
 /// ```test,Transitions
 /// transitions []
-/// transitions [in checked: {animate x { duration: 88ms; }} out checked: {animate x { duration: 88ms; }}]
+/// transitions [in checked: {animate x { duration: 88ms; }} out checked: {animate x { duration: 88ms; }} in-out checked: {animate x { duration: 88ms; }}]
 /// ```
 fn parse_transitions(p: &mut impl Parser) {
     debug_assert_eq!(p.peek().as_str(), "transitions");
@@ -566,14 +587,15 @@ fn parse_transitions(p: &mut impl Parser) {
 /// in pressed : {}
 /// in pressed: { animate x { duration: 88ms; } }
 /// out pressed: { animate x { duration: 88ms; } }
+/// in-out pressed: { animate x { duration: 88ms; } }
 /// ```
 fn parse_transition(p: &mut impl Parser) -> bool {
-    if !matches!(p.peek().as_str(), "in" | "out") {
-        p.error("Expected 'in' or 'out' to declare a transition");
+    if !matches!(p.peek().as_str(), "in" | "out" | "in-out" | "in_out") {
+        p.error("Expected 'in', 'out', or 'in-out' to declare a transition");
         return false;
     }
     let mut p = p.start_node(SyntaxKind::Transition);
-    p.consume(); // "in" or "out"
+    p.consume(); // "in", "out" or "in-out"
     {
         let mut p = p.start_node(SyntaxKind::DeclaredIdentifier);
         p.expect(SyntaxKind::Identifier);

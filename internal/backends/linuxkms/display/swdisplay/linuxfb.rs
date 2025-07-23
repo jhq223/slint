@@ -3,7 +3,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::os::fd::AsRawFd;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use i_slint_core::platform::PlatformError;
 
@@ -12,7 +12,7 @@ pub struct LinuxFBDisplay {
     back_buffer: RefCell<Box<[u8]>>,
     width: u32,
     height: u32,
-    presenter: Rc<crate::display::timeranimations::TimerBasedAnimationDriver>,
+    presenter: Arc<crate::display::noop_presenter::NoopPresenter>,
     first_frame: Cell<bool>,
     format: drm::buffer::DrmFourcc,
 }
@@ -20,8 +20,8 @@ pub struct LinuxFBDisplay {
 impl LinuxFBDisplay {
     pub fn new(
         device_opener: &crate::DeviceOpener,
-    ) -> Result<Rc<dyn super::SoftwareBufferDisplay>, PlatformError> {
-        let mut last_err = None;
+    ) -> Result<Arc<dyn super::SoftwareBufferDisplay>, PlatformError> {
+        let mut fb_errors: Vec<String> = Vec::new();
 
         for fbnum in 0..10 {
             match Self::new_with_path(
@@ -29,17 +29,20 @@ impl LinuxFBDisplay {
                 std::path::Path::new(&format!("/dev/fb{fbnum}")),
             ) {
                 Ok(dsp) => return Ok(dsp),
-                Err(e) => last_err = Some(e),
+                Err(e) => fb_errors.push(format!("Error using /dev/fb{fbnum}: {}", e)),
             }
         }
 
-        Err(last_err.unwrap_or_else(|| "Could not create a linuxfb display".into()))
+        Err(PlatformError::Other(format!(
+            "Could not open any legacy framebuffers.\n{}",
+            fb_errors.join("\n")
+        )))
     }
 
     fn new_with_path(
         device_opener: &crate::DeviceOpener,
         path: &std::path::Path,
-    ) -> Result<Rc<dyn super::SoftwareBufferDisplay>, PlatformError> {
+    ) -> Result<Arc<dyn super::SoftwareBufferDisplay>, PlatformError> {
         let fd = device_opener(path)?;
 
         let vinfo = unsafe {
@@ -93,12 +96,12 @@ impl LinuxFBDisplay {
 
         let back_buffer = RefCell::new(vec![0u8; size_bytes].into_boxed_slice());
 
-        Ok(Rc::new(Self {
+        Ok(Arc::new(Self {
             fb: RefCell::new(fb),
             back_buffer,
             width,
             height,
-            presenter: crate::display::timeranimations::TimerBasedAnimationDriver::new(),
+            presenter: crate::display::noop_presenter::NoopPresenter::new(),
             first_frame: Cell::new(true),
             format,
         }))
@@ -127,7 +130,7 @@ impl super::SoftwareBufferDisplay for LinuxFBDisplay {
         Ok(())
     }
 
-    fn as_presenter(self: Rc<Self>) -> Rc<dyn crate::display::Presenter> {
+    fn as_presenter(self: Arc<Self>) -> Arc<dyn crate::display::Presenter> {
         self.presenter.clone()
     }
 }

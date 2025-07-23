@@ -16,6 +16,8 @@ export { ArrayModel } from "./models";
 
 import { Diagnostic } from "../rust-module.cjs";
 
+import { fileURLToPath } from "node:url";
+
 /**
  *  Represents a two-dimensional point.
  */
@@ -70,7 +72,7 @@ export interface Window {
     /** Gets or sets the window's maximized state **/
     maximized: boolean;
 
-    /** Gets or sets teh window's minimized state **/
+    /** Gets or sets the window's minimized state **/
     minimized: boolean;
 
     /**
@@ -327,7 +329,7 @@ function loadSlint(loadData: LoadData): Object {
     for (const key in compiler.structs) {
         Object.defineProperty(slint_module, translateName(key), {
             value: function (properties: any) {
-                const defaultObject = structs[key];
+                const defaultObject = structs[key] as any;
                 const newObject = Object.create({});
 
                 for (const propertyKey in defaultObject) {
@@ -459,8 +461,15 @@ function loadSlint(loadData: LoadData): Object {
 
                 // globals
                 instance!.definition().globals.forEach((globalName) => {
-                    if (componentHandle[globalName] !== undefined) {
-                        console.warn("Duplicated property name " + globalName);
+                    const jsName = translateName(globalName);
+                    if (componentHandle[jsName] !== undefined) {
+                        console.warn(
+                            "Duplicated property name " +
+                                globalName +
+                                " (In JS: " +
+                                jsName +
+                                ")",
+                        );
                     } else {
                         const globalObject = Object.create({});
 
@@ -574,7 +583,7 @@ function loadSlint(loadData: LoadData): Object {
                                 }
                             });
 
-                        Object.defineProperty(componentHandle, globalName, {
+                        Object.defineProperty(componentHandle, jsName, {
                             get() {
                                 return globalObject;
                             },
@@ -619,14 +628,15 @@ function loadSlint(loadData: LoadData): Object {
  * @returns Returns an object that is immutable and provides a constructor function for each exported Window component found in the `.slint` file.
  *          For instance, in the example above, a `Main` property is available, which can be used to create instances of the `Main` component using the `new` keyword.
  *          These instances offer properties and event handlers, adhering to the {@link ComponentHandle} interface.
- *          For further information on the available properties, refer to [Instantiating A Component](../index.html#md:instantiating-a-component).
+ *          For further information on the available properties, refer to [Instantiating A Component](../index.html#instantiating-a-component).
  * @throws {@link CompileError} if errors occur during compilation.
  */
 export function loadFile(
     filePath: string | URL,
     options?: LoadFileOptions,
 ): Object {
-    const pathname = filePath instanceof URL ? filePath.pathname : filePath;
+    const pathname =
+        filePath instanceof URL ? fileURLToPath(filePath) : filePath;
     return loadSlint({
         fileData: { filePath: pathname, options },
         from: "file",
@@ -658,7 +668,7 @@ export function loadFile(
  * @returns Returns an object that is immutable and provides a constructor function for each exported Window component found in the `.slint` file.
  *          For instance, in the example above, a `Main` property is available, which can be used to create instances of the `Main` component using the `new` keyword.
  *          These instances offer properties and event handlers, adhering to the {@link ComponentHandle} interface.
- *          For further information on the available properties, refer to [Instantiating A Component](../index.html#md:instantiating-a-component).
+ *          For further information on the available properties, refer to [Instantiating A Component](../index.html#instantiating-a-component).
  * @throws {@link CompileError} if errors occur during compilation.
  */
 export function loadSource(
@@ -948,7 +958,7 @@ export namespace private_api {
  * ````
  */
 export function initTranslations(domain: string, path: string | URL) {
-    const pathname = path instanceof URL ? path.pathname : path;
+    const pathname = path instanceof URL ? fileURLToPath(path) : path;
     napi.initTranslations(domain, pathname);
 }
 

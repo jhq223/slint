@@ -9,6 +9,13 @@ export component TabImpl inherits NativeTab {
     accessible-role: tab;
     accessible-enabled: root.enabled;
     accessible-label <=> root.title;
+    accessible-item-index: root.tab-index;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.tab-index == root.current;
+    accessible-action-default => {
+        root.current = root.tab-index;
+        root.current-focused = root.tab-index;
+    }
 }
 
 export component TabBarImpl inherits TabBarBase {
@@ -18,6 +25,7 @@ export component TabBarImpl inherits TabBarBase {
 
     accessible-role: tab-list;
     accessible-delegate-focus: root.current;
+    accessible-item-count: root.num-tabs;
 
     Rectangle {
         // The breeze style draws outside of the tab bar, which is clip by default with Qt

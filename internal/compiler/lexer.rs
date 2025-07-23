@@ -22,7 +22,7 @@ pub trait LexingRule {
     fn lex(&self, text: &str, state: &mut LexState) -> usize;
 }
 
-impl<'a> LexingRule for &'a str {
+impl LexingRule for &str {
     #[inline]
     fn lex(&self, text: &str, _: &mut LexState) -> usize {
         if text.starts_with(*self) {
@@ -44,7 +44,7 @@ pub fn lex_whitespace(text: &str, _: &mut LexState) -> usize {
     let mut len = 0;
     let chars = text.chars();
     for c in chars {
-        if !c.is_whitespace() {
+        if !c.is_whitespace() && !['\u{0002}', '\u{0003}'].contains(&c) {
             break;
         }
         len += c.len_utf8();
@@ -198,6 +198,17 @@ pub fn lex(mut source: &str) -> Vec<crate::parser::Token> {
     let mut result = vec![];
     let mut offset = 0;
     let mut state = LexState::default();
+    if source.starts_with("\u{FEFF}") {
+        // Skip BOM
+        result.push(crate::parser::Token {
+            kind: SyntaxKind::Whitespace,
+            text: source[..3].into(),
+            offset: 0,
+            ..Default::default()
+        });
+        source = &source[3..];
+        offset += 3;
+    }
     while !source.is_empty() {
         if let Some((len, kind)) = crate::parser::lex_next_token(source, &mut state) {
             result.push(crate::parser::Token {
@@ -413,6 +424,13 @@ fn test_locate_rust_macro() {
 ///
 /// All the other bytes which are not newlines are replaced by space. This allow offsets in the resulting
 /// string to preserve line and column number.
+///
+/// The last byte before the Slint area will be \u{2} (ASCII Start-of-Text), the first byte after
+/// the slint code will be \u{3} (ASCII End-of-Text), so that programs can find the area of slint code
+/// within the program.
+///
+/// Note that the slint compiler considers Start-of-Text and End-of-Text as whitespace and will treat them
+/// accordingly.
 pub fn extract_rust_macro(rust_source: String) -> Option<String> {
     let core::ops::Range { start, end } = locate_slint_macro(&rust_source).next()?;
     let mut bytes = rust_source.into_bytes();
@@ -421,9 +439,17 @@ pub fn extract_rust_macro(rust_source: String) -> Option<String> {
             *c = b' '
         }
     }
-    for c in &mut bytes[end..] {
-        if *c != b'\n' {
-            *c = b' '
+
+    if start > 0 {
+        bytes[start - 1] = 2;
+    }
+    if end < bytes.len() {
+        bytes[end] = 3;
+
+        for c in &mut bytes[end + 1..] {
+            if *c != b'\n' {
+                *c = b' '
+            }
         }
     }
     Some(String::from_utf8(bytes).expect("We just added spaces"))
@@ -437,23 +463,23 @@ fn test_extract_rust_macro() {
             "abc\n€\nslint !  {x \" \\\" }🦀\" { () {}\n {} }xx =}-  ;}\n xxx \n yyy {}\n".into(),
         ),
         Some(
-            "   \n   \n          x \" \\\" }🦀\" { () {}\n {} }xx =      \n     \n       \n".into(),
+            "   \n   \n         \u{2}x \" \\\" }🦀\" { () {}\n {} }xx =\u{3}     \n     \n       \n".into(),
         )
     );
 
     assert_eq!(
         extract_rust_macro("xx\nabcd::slint!{abc{}efg".into()),
-        Some("  \n             abc{}efg".into())
+        Some("  \n            \u{2}abc{}efg".into())
     );
     assert_eq!(
         extract_rust_macro("slint!\nnot.\nslint!{\nunterminated\nxxx".into()),
-        Some("      \n    \n       \nunterminated\nxxx".into())
+        Some("      \n    \n      \u{2}\nunterminated\nxxx".into())
     );
     assert_eq!(extract_rust_macro("foo\n/* slint! { hello }\n".into()), None);
     assert_eq!(extract_rust_macro("foo\n/* slint::slint! { hello }\n".into()), None);
     assert_eq!(
         extract_rust_macro("foo\n// slint! { hello }\nslint!{world}\na".into()),
-        Some("   \n                   \n       world \n ".into())
+        Some("   \n                   \n      \u{2}world\u{3}\n ".into())
     );
     assert_eq!(extract_rust_macro("foo\n\" slint! { hello }\"\n".into()), None);
     assert_eq!(
@@ -461,11 +487,11 @@ fn test_extract_rust_macro() {
             "abc\n€\nslint !  (x /* \\\" )🦀*/ { () {}\n {} }xx =)-  ;}\n xxx \n yyy {}\n".into(),
         ),
         Some(
-            "   \n   \n          x /* \\\" )🦀*/ { () {}\n {} }xx =      \n     \n       \n".into(),
+            "   \n   \n         \u{2}x /* \\\" )🦀*/ { () {}\n {} }xx =\u{3}     \n     \n       \n".into(),
         )
     );
     assert_eq!(
         extract_rust_macro("abc slint![x slint!() [{[]}] s] abc".into()),
-        Some("           x slint!() [{[]}] s     ".into()),
+        Some("          \u{0002}x slint!() [{[]}] s\u{0003}    ".into()),
     );
 }

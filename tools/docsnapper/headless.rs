@@ -5,7 +5,7 @@ use i_slint_core::api::PhysicalSize;
 use i_slint_core::platform::PlatformError;
 use i_slint_core::renderer::Renderer;
 use i_slint_core::window::{InputMethodRequest, WindowAdapter, WindowAdapterInternal};
-use i_slint_renderer_skia::SkiaRenderer;
+use i_slint_renderer_skia::{SkiaRenderer, SkiaSharedContext};
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -41,7 +41,7 @@ impl i_slint_core::platform::Platform for HeadlessBackend {
             size: Default::default(),
             ime_requests: Default::default(),
             mouse_cursor: Default::default(),
-            renderer: SkiaRenderer::default_software(),
+            renderer: SkiaRenderer::default_software(&SkiaSharedContext::default()),
         }))
     }
 
@@ -130,9 +130,9 @@ impl WindowAdapter for HeadlessWindow {
 
     fn set_size(&self, size: i_slint_core::api::WindowSize) {
         self.window.dispatch_event(i_slint_core::platform::WindowEvent::Resized {
-            size: size.to_logical(1.),
+            size: size.to_logical(self.window().scale_factor()),
         });
-        self.size.set(size.to_physical(1.))
+        self.size.set(size.to_physical(self.window().scale_factor()))
     }
 
     fn renderer(&self) -> &dyn Renderer {
@@ -182,4 +182,10 @@ impl i_slint_core::platform::EventLoopProxy for Queue {
 pub fn init() {
     i_slint_core::platform::set_platform(Box::new(HeadlessBackend::default()))
         .expect("platform already initialized");
+}
+
+pub fn set_window_scale_factor(window: &slint_interpreter::Window, factor: f32) {
+    window.dispatch_event(i_slint_core::platform::WindowEvent::ScaleFactorChanged {
+        scale_factor: factor,
+    });
 }

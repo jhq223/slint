@@ -6,7 +6,7 @@
 //! If an expression does a single property access or less, it can be inlined
 //! in the calling expression
 
-use crate::expression_tree::BuiltinFunction;
+use crate::expression_tree::{BuiltinFunction, ImageReference};
 use crate::llr::{CompilationUnit, EvaluationContext, Expression};
 
 const PROPERTY_ACCESS_COST: isize = 1000;
@@ -35,13 +35,20 @@ fn expression_cost(exp: &Expression, ctx: &EvaluationContext) -> isize {
         Expression::BuiltinFunctionCall { function, .. } => builtin_function_cost(function),
         Expression::CallBackCall { callback, .. } => callback_cost(callback, ctx),
         Expression::FunctionCall { function, .. } => callback_cost(function, ctx),
+        Expression::ItemMemberFunctionCall { function } => callback_cost(function, ctx),
         Expression::ExtraBuiltinFunctionCall { .. } => return isize::MAX,
         Expression::PropertyAssignment { .. } => return isize::MAX,
         Expression::ModelDataAssignment { .. } => return isize::MAX,
         Expression::ArrayIndexAssignment { .. } => return isize::MAX,
         Expression::BinaryExpression { .. } => 1,
         Expression::UnaryOp { .. } => 1,
-        Expression::ImageReference { .. } => 1,
+        // Avoid inlining calls to load the image from the cache, as in the worst case the image isn't cached
+        // and repeated calls will load the image over and over again. It's better to keep the image cached in the
+        // `property<image>` of the `Image` element, with the exception of embedded textures.
+        Expression::ImageReference {
+            resource_ref: ImageReference::EmbeddedTexture { .. }, ..
+        } => 1,
+        Expression::ImageReference { .. } => return isize::MAX,
         Expression::Condition { condition, true_expr, false_expr } => {
             return expression_cost(condition, ctx)
                 .saturating_add(
@@ -95,16 +102,23 @@ fn builtin_function_cost(function: &BuiltinFunction) -> isize {
         BuiltinFunction::ATan => 10,
         BuiltinFunction::ATan2 => 10,
         BuiltinFunction::Log => 10,
+        BuiltinFunction::Ln => 10,
         BuiltinFunction::Pow => 10,
+        BuiltinFunction::Exp => 10,
+        BuiltinFunction::ToFixed => ALLOC_COST,
+        BuiltinFunction::ToPrecision => ALLOC_COST,
         BuiltinFunction::SetFocusItem | BuiltinFunction::ClearFocusItem => isize::MAX,
         BuiltinFunction::ShowPopupWindow
         | BuiltinFunction::ClosePopupWindow
         | BuiltinFunction::ShowPopupMenu => isize::MAX,
         BuiltinFunction::SetSelectionOffsets => isize::MAX,
-        BuiltinFunction::ItemMemberFunction(..) => isize::MAX,
         BuiltinFunction::ItemFontMetrics => PROPERTY_ACCESS_COST,
         BuiltinFunction::StringToFloat => 50,
         BuiltinFunction::StringIsFloat => 50,
+        BuiltinFunction::StringIsEmpty => 50,
+        BuiltinFunction::StringCharacterCount => 50,
+        BuiltinFunction::StringToLowercase => ALLOC_COST,
+        BuiltinFunction::StringToUppercase => ALLOC_COST,
         BuiltinFunction::ColorRgbaStruct => 50,
         BuiltinFunction::ColorHsvaStruct => 50,
         BuiltinFunction::ColorBrighter => 50,
@@ -121,7 +135,9 @@ fn builtin_function_cost(function: &BuiltinFunction) -> isize {
         BuiltinFunction::RegisterCustomFontByPath => isize::MAX,
         BuiltinFunction::RegisterCustomFontByMemory => isize::MAX,
         BuiltinFunction::RegisterBitmapFont => isize::MAX,
-        BuiltinFunction::ColorScheme => isize::MAX,
+        BuiltinFunction::ColorScheme => PROPERTY_ACCESS_COST,
+        BuiltinFunction::SupportsNativeMenuBar => 10,
+        BuiltinFunction::SetupNativeMenuBar => isize::MAX,
         BuiltinFunction::MonthDayCount => isize::MAX,
         BuiltinFunction::MonthOffset => isize::MAX,
         BuiltinFunction::FormatDate => isize::MAX,
@@ -133,6 +149,10 @@ fn builtin_function_cost(function: &BuiltinFunction) -> isize {
         BuiltinFunction::Translate => 2 * ALLOC_COST + PROPERTY_ACCESS_COST,
         BuiltinFunction::Use24HourFormat => 2 * ALLOC_COST + PROPERTY_ACCESS_COST,
         BuiltinFunction::UpdateTimers => 10,
+        BuiltinFunction::DetectOperatingSystem => 10,
+        BuiltinFunction::StartTimer => 10,
+        BuiltinFunction::StopTimer => 10,
+        BuiltinFunction::RestartTimer => 10,
     }
 }
 

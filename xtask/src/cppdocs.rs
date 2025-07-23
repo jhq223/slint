@@ -85,6 +85,7 @@ pub fn generate(show_warnings: bool, experimental: bool) -> Result<(), Box<dyn s
     let generated_headers_dir = docs_build_dir.join("generated_include");
     let enabled_features = cbindgen::EnabledFeatures {
         interpreter: true,
+        live_reload: false,
         testing: true,
         backend_qt: true,
         backend_winit: true,
@@ -105,24 +106,41 @@ pub fn generate(show_warnings: bool, experimental: bool) -> Result<(), Box<dyn s
     };
     cbindgen::gen_all(&root, &generated_headers_dir, enabled_features)?;
 
-    let pip_env = vec![(OsString::from("PIPENV_PIPFILE"), docs_source_dir.join("docs/Pipfile"))];
+    let uv_project = vec![(OsString::from("UV_PROJECT"), docs_source_dir.join("docs"))];
 
-    println!("Running pipenv install");
+    println!("Generating third-party license list with cargo-about");
 
-    super::run_command("pipenv", &["install"], pip_env.clone())
-        .context("Error running pipenv install")?;
+    let cargo_about_output = super::run_command(
+        "cargo",
+        &[
+            "about",
+            "generate",
+            "--manifest-path",
+            "api/cpp/Cargo.toml",
+            "api/cpp/docs/thirdparty.hbs",
+            "-o",
+            docs_build_dir.join("thirdparty.md").to_str().unwrap(),
+        ],
+        std::iter::empty::<(std::ffi::OsString, std::ffi::OsString)>(),
+    )?;
+
+    println!(
+        "{}\n{}",
+        String::from_utf8_lossy(&cargo_about_output.stdout),
+        String::from_utf8_lossy(&cargo_about_output.stderr)
+    );
 
     println!("Running sphinx-build");
 
     let output = super::run_command(
-        "pipenv",
+        "uv",
         &[
             "run",
             "sphinx-build",
             docs_build_dir.to_str().unwrap(),
             docs_build_dir.join("html").to_str().unwrap(),
         ],
-        pip_env,
+        uv_project,
     )
     .context("Error running pipenv install")?;
 

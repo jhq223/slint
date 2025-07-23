@@ -93,7 +93,7 @@ pub mod generated_code {
 
     impl ComponentHandle for SampleComponent {
         #[doc(hidden)]
-        type Inner = SampleComponent;
+        type WeakInner = ();
 
         /// Returns a new weak pointer.
         fn as_weak(&self) -> Weak<Self> {
@@ -106,9 +106,7 @@ pub mod generated_code {
         }
 
         #[doc(hidden)]
-        fn from_inner(
-            _: vtable::VRc<crate::private_unstable_api::re_exports::ItemTreeVTable, Self::Inner>,
-        ) -> Self {
+        fn upgrade_from_weak_inner(_: &Self::WeakInner) -> Option<Self> {
             unimplemented!();
         }
 
@@ -157,6 +155,7 @@ pub mod mcu {
     }
 }
 
+#[i_slint_core_macros::slint_doc]
 pub mod cargo_features {
     //! # Feature flags and backend selection.
     //! Use the following feature flags in your Cargo.toml to enable additional features.
@@ -164,7 +163,7 @@ pub mod cargo_features {
     #![cfg_attr(feature = "document-features", doc = document_features::document_features!())]
     //!
     //! More information about the backend and renderers is available in the
-    #![doc = concat!("[Slint Documentation](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint/src/advanced/backends_and_renderers.html)")]
+    //![Slint Documentation](slint:backends_and_renderers)")]
     use crate::*;
 }
 

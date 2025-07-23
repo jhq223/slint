@@ -4,6 +4,7 @@
 import { HorizontalBox, VerticalBox, Palette } from "std-widgets.slint";
 
 component SideBarItem inherits Rectangle {
+    in property <int> tab-index;
     in property <bool> selected;
     in property <bool> has-focus;
     in-out property <string> text <=> label.text;
@@ -11,6 +12,12 @@ component SideBarItem inherits Rectangle {
     callback clicked <=> touch.clicked;
 
     min-height: l.preferred-height;
+    accessible-role: tab;
+    accessible-label: root.text;
+    accessible-item-index: root.tab-index;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.selected;
+    accessible-action-default => { self.clicked(); }
 
     states [
         pressed when touch.pressed : {
@@ -40,7 +47,8 @@ component SideBarItem inherits Rectangle {
 
         label := Text {
             vertical-alignment: center;
-         }
+            accessible-role: none;
+        }
     }
 
     touch := TouchArea {
@@ -57,42 +65,9 @@ export component SideBar inherits Rectangle {
 
     width: 180px;
     forward-focus: fs;
-    accessible-role: tab;
-    accessible-delegate-focus: root.current-focused >= 0 ? root.current-focused : root.current-item;
 
     Rectangle {
         background: Palette.background.darker(0.2);
-
-        fs := FocusScope {
-            key-pressed(event) => {
-                if (event.text == "\n") {
-                     root.current-item = root.current-focused;
-                     return accept;
-                }
-                if (event.text == Key.UpArrow) {
-                     self.focused-tab = Math.max(self.focused-tab - 1,  0);
-                     return accept;
-                }
-                if (event.text == Key.DownArrow) {
-                     self.focused-tab = Math.min(self.focused-tab + 1, root.model.length - 1);
-                     return accept;
-                }
-                return reject;
-            }
-
-            key-released(event) => {
-                if (event.text == " ") {
-                     root.current-item = root.current-focused;
-                     return accept;
-                }
-                return reject;
-            }
-
-            property <int> focused-tab: 0;
-
-            x: 0;
-            width: 0; // Do not react on clicks
-        }
     }
 
     VerticalBox {
@@ -108,9 +83,46 @@ export component SideBar inherits Rectangle {
         navigation := VerticalLayout {
             alignment: start;
             vertical-stretch: 0;
+            accessible-role: tab-list;
+            accessible-delegate-focus: root.current-focused >= 0 ? root.current-focused : root.current-item;
+            accessible-label: root.title;
+            accessible-item-count: root.model.length;
+
+            fs := FocusScope {
+                key-pressed(event) => {
+                    if (event.text == "\n") {
+                         root.current-item = root.current-focused;
+                         return accept;
+                    }
+                    if (event.text == Key.UpArrow) {
+                         self.focused-tab = Math.max(self.focused-tab - 1, 0);
+                         return accept;
+                    }
+                    if (event.text == Key.DownArrow) {
+                         self.focused-tab = Math.min(self.focused-tab + 1, root.model.length - 1);
+                         return accept;
+                    }
+                    return reject;
+                }
+
+                key-released(event) => {
+                    if (event.text == " ") {
+                         root.current-item = root.current-focused;
+                         return accept;
+                    }
+                    return reject;
+                }
+
+                property <int> focused-tab: 0;
+
+                x: 0;
+                width: 0; // Do not react on clicks
+            }
+
             for item[index] in root.model : SideBarItem {
                 clicked => { root.current-item = index; }
 
+                tab-index: index;
                 has-focus: index == root.current-focused;
                 text: item;
                 selected: index == root.current-item;

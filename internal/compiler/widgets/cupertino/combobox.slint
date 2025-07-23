@@ -26,6 +26,10 @@ export component ComboBox {
     forward-focus: base;
     accessible-role: combobox;
     accessible-enabled: root.enabled;
+    accessible-expandable: true;
+    accessible-expanded: base.popup-has-focus;
+    accessible-value <=> root.current-value;
+    accessible-action-expand => { base.show-popup(); }
 
     states [
         disabled when !root.enabled : {
@@ -43,8 +47,14 @@ export component ComboBox {
         width: 100%;
         height: 100%;
 
+        // Mac doesn't react on mouse wheel on the ComboBox.
+        scroll-delta: 1000000px;
+
         show-popup => {
             popup.show();
+        }
+        close-popup => {
+            popup.close();
         }
     }
 
@@ -92,11 +102,12 @@ export component ComboBox {
             font-weight: CupertinoFontSettings.body.font-weight;
             color: CupertinoPalette.foreground;
             text: root.current-value;
+            accessible-role: none;
         }
 
         VerticalLayout {
             alignment: center;
-            
+
             Rectangle {
                 horizontal-stretch: 0;
                 min-width: 16px;
@@ -142,12 +153,14 @@ export component ComboBox {
                         x: (parent.width - self.width) / 2;
                         colorize: CupertinoPalette.accent-foreground;
                         source: Icons.chevron-up;
+                        accessible-role: none;
                     }
 
                     bottom-icon := Image {
                         x: (parent.width - self.width) / 2;
                         colorize: CupertinoPalette.accent-foreground;
                         source: Icons.chevron-down;
+                        accessible-role: none;
                     }
                 }
             }
@@ -159,25 +172,35 @@ export component ComboBox {
         y: parent.height + 6px;
         width: root.width;
         height: root.visible-items * CupertinoSizeSettings.item-height  + 2 * root.popup-padding;
+        forward-focus: inner-fs;
 
-        MenuBorder {
-            ScrollView {
-                VerticalLayout {
-                    alignment: start;
-                    padding: root.popup-padding;
+        inner-fs := FocusScope {
+            focus-changed-event => {
+                base.popup-has-focus = self.has-focus;
+            }
+            key-pressed(event) => {
+                return base.popup-key-handler(event);
+            }
 
-                    for value[index] in root.model : ListItem {
-                        padding-horizontal: 0;
-                        item: { text: value };
-                        is-selected: index == root.current-index;
-                        has-hover: touch-area.has-hover;
-                        pressed: touch-area.pressed;
-                        pressed-x: touch-area.pressed-x;
-                        pressed-y: touch-area.pressed-y;
+            MenuBorder {
+                ScrollView {
+                    VerticalLayout {
+                        alignment: start;
+                        padding: root.popup-padding;
 
-                        touch-area := TouchArea {
-                            clicked => {
-                                base.select(index);
+                        for value[index] in root.model : ListItem {
+                            padding-horizontal: 0;
+                            item: { text: value };
+                            is-selected: index == root.current-index;
+                            has-hover: touch-area.has-hover;
+                            pressed: touch-area.pressed;
+                            pressed-x: touch-area.pressed-x;
+                            pressed-y: touch-area.pressed-y;
+
+                            touch-area := TouchArea {
+                                clicked => {
+                                    base.select(index);
+                                }
                             }
                         }
                     }

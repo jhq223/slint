@@ -21,12 +21,14 @@ export component TextEdit {
     in-out property <length> viewport-height <=> base.viewport-height;
 
     callback edited <=> base.edited;
-    callback rejected <=> base.rejected;
+    callback key-pressed <=> base.key-pressed;
+    callback key-released <=> base.key-released;
 
     accessible-role: AccessibleRole.text-input;
     accessible-enabled: root.enabled;
     accessible-value <=> text;
     accessible-placeholder-text: text == "" ? placeholder-text : "";
+    accessible-read-only: root.read-only;
 
     public function set-selection-offsets(start: int, end: int) {
         base.set-selection-offsets(start, end);

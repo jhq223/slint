@@ -11,7 +11,6 @@ mod semantic_tokens;
 mod signature_help;
 #[cfg(test)]
 pub mod test;
-pub mod token_info;
 
 use crate::common;
 use crate::util;
@@ -32,9 +31,9 @@ use lsp_types::{
     ClientCapabilities, CodeActionOrCommand, CodeActionProviderCapability, CodeLens,
     CodeLensOptions, Color, ColorInformation, ColorPresentation, Command, CompletionOptions,
     DocumentSymbol, DocumentSymbolResponse, InitializeParams, InitializeResult, OneOf, Position,
-    PrepareRenameResponse, PublishDiagnosticsParams, RenameOptions, SemanticTokensFullOptions,
-    SemanticTokensLegend, SemanticTokensOptions, ServerCapabilities, ServerInfo,
-    TextDocumentSyncCapability, TextEdit, Url, WorkDoneProgressOptions,
+    PrepareRenameResponse, RenameOptions, SemanticTokensFullOptions, SemanticTokensLegend,
+    SemanticTokensOptions, ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextEdit,
+    Url, WorkDoneProgressOptions,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -44,10 +43,12 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::rc::Rc;
 
+const POPULATE_COMMAND: &str = "slint/populate";
 pub const SHOW_PREVIEW_COMMAND: &str = "slint/showPreview";
 
 fn command_list() -> Vec<String> {
     vec![
+        POPULATE_COMMAND.into(),
         #[cfg(any(feature = "preview-builtin", feature = "preview-external"))]
         SHOW_PREVIEW_COMMAND.into(),
     ]
@@ -66,6 +67,20 @@ fn create_show_preview_command(
     )
 }
 
+fn create_populate_command(
+    uri: lsp_types::Url,
+    version: common::SourceFileVersion,
+    title: String,
+    text: String,
+) -> Command {
+    let text_document = lsp_types::OptionalVersionedTextDocumentIdentifier { uri, version };
+    Command::new(
+        title,
+        POPULATE_COMMAND.into(),
+        Some(vec![serde_json::to_value(text_document).unwrap(), text.into()]),
+    )
+}
+
 #[cfg(any(feature = "preview-external", feature = "preview-engine"))]
 pub fn request_state(ctx: &std::rc::Rc<Context>) {
     let document_cache = ctx.document_cache.borrow();
@@ -81,9 +96,11 @@ pub fn request_state(ctx: &std::rc::Rc<Context>) {
             contents: node.text().to_string(),
         })
     }
+
     ctx.server_notifier.send_message_to_preview(common::LspToPreviewMessage::SetConfiguration {
         config: ctx.preview_config.borrow().clone(),
     });
+
     if let Some(c) = ctx.to_show.borrow().clone() {
         ctx.server_notifier.send_message_to_preview(common::LspToPreviewMessage::ShowPreview(c))
     }
@@ -344,10 +361,14 @@ pub fn register_request_handlers(rh: &mut RequestHandler) {
             });
         Ok(result)
     });
-    rh.register::<ExecuteCommand, _>(|params, _ctx| async move {
+    rh.register::<ExecuteCommand, _>(|params, ctx| async move {
         if params.command.as_str() == SHOW_PREVIEW_COMMAND {
             #[cfg(any(feature = "preview-builtin", feature = "preview-external"))]
-            show_preview_command(&params.arguments, &_ctx)?;
+            show_preview_command(&params.arguments, &ctx)?;
+            return Ok(None::<serde_json::Value>);
+        }
+        if params.command.as_str() == POPULATE_COMMAND {
+            populate_command(&params.arguments, &ctx).await?;
             return Ok(None::<serde_json::Value>);
         }
         Ok(None::<serde_json::Value>)
@@ -402,7 +423,7 @@ pub fn register_request_handlers(rh: &mut RequestHandler) {
             let gp = p.parent();
 
             if p.kind() == SyntaxKind::DeclaredIdentifier
-                && gp.as_ref().map_or(false, |n| n.kind() == SyntaxKind::Component)
+                && gp.as_ref().is_some_and(|n| n.kind() == SyntaxKind::Component)
             {
                 let element = gp.as_ref().unwrap().child_node(SyntaxKind::Element).unwrap();
 
@@ -418,7 +439,7 @@ pub fn register_request_handlers(rh: &mut RequestHandler) {
             }
 
             if p.kind() == SyntaxKind::QualifiedName
-                && gp.as_ref().map_or(false, |n| n.kind() == SyntaxKind::Element)
+                && gp.as_ref().is_some_and(|n| n.kind() == SyntaxKind::Element)
             {
                 let range = util::node_to_lsp_range(&p);
 
@@ -427,7 +448,7 @@ pub fn register_request_handlers(rh: &mut RequestHandler) {
                     .unwrap()
                     .parent()
                     .as_ref()
-                    .map_or(false, |n| n.kind() != SyntaxKind::Component)
+                    .is_some_and(|n| n.kind() != SyntaxKind::Component)
                 {
                     ctx.server_notifier.send_message_to_preview(
                         common::LspToPreviewMessage::HighlightFromEditor {
@@ -477,45 +498,33 @@ pub fn register_request_handlers(rh: &mut RequestHandler) {
                     .collect();
                 return Ok(Some(common::create_workspace_edit(uri, version, edits)));
             }
-            match p.kind() {
-                SyntaxKind::DeclaredIdentifier => {
-                    common::rename_component::rename_component_from_definition(
-                        &document_cache,
-                        &p.into(),
-                        &params.new_name,
-                    )
+            if let Some(declaration_node) =
+                common::rename_component::find_declaration_node(&document_cache, &tk)
+            {
+                return declaration_node
+                    .rename(&document_cache, &params.new_name)
                     .map(Some)
                     .map_err(|e| LspError {
                         code: LspErrorCode::RequestFailed,
                         message: e.to_string(),
-                    })
-                }
-                _ => Err(LspError {
-                    code: LspErrorCode::RequestFailed,
-                    message: "This symbol cannot be renamed.".into(),
-                }),
+                    });
             }
-        } else {
-            Err(LspError {
-                code: LspErrorCode::RequestFailed,
-                message: "This symbol cannot be renamed.".into(),
-            })
         }
+
+        Err(LspError {
+            code: LspErrorCode::RequestFailed,
+            message: "This symbol cannot be renamed.".into(),
+        })
     });
     rh.register::<PrepareRenameRequest, _>(|params, ctx| async move {
         let mut document_cache = ctx.document_cache.borrow_mut();
         let uri = params.text_document.uri;
-        if let Some((tk, _off)) = token_descr(&mut document_cache, &uri, &params.position) {
+        if let Some((tk, _)) = token_descr(&mut document_cache, &uri, &params.position) {
             if find_element_id_for_highlight(&tk, &tk.parent()).is_some() {
                 return Ok(Some(PrepareRenameResponse::Range(util::token_to_lsp_range(&tk))));
             }
-            let p = tk.parent();
-            if matches!(p.kind(), SyntaxKind::DeclaredIdentifier) {
-                if let Some(gp) = p.parent() {
-                    if gp.kind() == SyntaxKind::Component {
-                        return Ok(Some(PrepareRenameResponse::Range(util::node_to_lsp_range(&p))));
-                    }
-                }
+            if common::rename_component::find_declaration_node(&document_cache, &tk).is_some() {
+                return Ok(Some(PrepareRenameResponse::Range(util::token_to_lsp_range(&tk))));
             }
         }
         Ok(None)
@@ -535,11 +544,11 @@ fn extract_param<T: serde::de::DeserializeOwned>(
 ) -> Result<T, LspError> {
     let p = params.get(index).ok_or_else(|| LspError {
         code: LspErrorCode::InvalidParameter,
-        message: format!("{} parameter is missing", name),
+        message: format!("{name} parameter is missing"),
     })?;
     serde_json::from_value(p.clone()).map_err(|e| LspError {
         code: LspErrorCode::InvalidParameter,
-        message: format!("{} parameter is invalid: {}", name, e),
+        message: format!("{name} parameter is invalid: {e}"),
     })
 }
 
@@ -576,52 +585,195 @@ pub fn show_preview_command(
     Ok(())
 }
 
+fn populate_command_range(node: &SyntaxNode) -> Option<lsp_types::Range> {
+    let range = node.text_range();
+
+    let start_offset = node
+        .text()
+        .find_char('\u{0002}')
+        .and_then(|s| s.checked_add(1.into()))
+        .unwrap_or(range.start());
+    let end_offset = node.text().find_char('\u{0003}').unwrap_or(range.end());
+
+    (start_offset <= end_offset).then_some(util::text_range_to_lsp_range(
+        &node.source_file,
+        TextRange::new(start_offset, end_offset),
+    ))
+}
+
+pub async fn populate_command(
+    params: &[serde_json::Value],
+    ctx: &Rc<Context>,
+) -> Result<serde_json::Value, LspError> {
+    let text_document =
+        serde_json::from_value::<lsp_types::OptionalVersionedTextDocumentIdentifier>(
+            params
+                .first()
+                .ok_or_else(|| LspError {
+                    code: LspErrorCode::InvalidParameter,
+                    message: "No textdocument provided".into(),
+                })?
+                .clone(),
+        )
+        .map_err(|_| LspError {
+            code: LspErrorCode::InvalidParameter,
+            message: "First parameter is not a OptionalVersionedTextDocumentIdentifier".into(),
+        })?;
+    let new_text = serde_json::from_value::<String>(
+        params
+            .get(1)
+            .ok_or_else(|| LspError {
+                code: LspErrorCode::InvalidParameter,
+                message: "No code to insert".into(),
+            })?
+            .clone(),
+    )
+    .map_err(|_| LspError {
+        code: LspErrorCode::InvalidParameter,
+        message: "Invalid second parameter".into(),
+    })?;
+
+    let edit = {
+        let document_cache = &mut ctx.document_cache.borrow_mut();
+        let uri = text_document.uri;
+        let version = document_cache.document_version(&uri);
+
+        if let Some(source_version) = text_document.version {
+            if let Some(current_version) = version {
+                if current_version != source_version {
+                    return Err(LspError {
+                        code: LspErrorCode::InvalidParameter,
+                        message: "Document version mismatch".into(),
+                    });
+                }
+            } else {
+                return Err(LspError {
+                    code: LspErrorCode::InvalidParameter,
+                    message: format!("Document with uri {uri} not found in cache"),
+                });
+            }
+        }
+
+        let Some(doc) = document_cache.get_document(&uri) else {
+            return Err(LspError {
+                code: LspErrorCode::InvalidParameter,
+                message: "Document not in cache".into(),
+            });
+        };
+        let Some(node) = &doc.node else {
+            return Err(LspError {
+                code: LspErrorCode::InvalidParameter,
+                message: "Document has no node".into(),
+            });
+        };
+
+        let Some(range) = populate_command_range(node) else {
+            return Err(LspError {
+                code: LspErrorCode::InvalidParameter,
+                message: "No slint code range in document".into(),
+            });
+        };
+
+        let edit = lsp_types::TextEdit { range, new_text };
+        common::create_workspace_edit(uri, version, vec![edit])
+    };
+
+    let response = ctx
+        .server_notifier
+        .send_request::<lsp_types::request::ApplyWorkspaceEdit>(
+            lsp_types::ApplyWorkspaceEditParams { label: Some("Populate empty file".into()), edit },
+        )
+        .map_err(|_| LspError {
+            code: LspErrorCode::RequestFailed,
+            message: "Failed to send populate edit".into(),
+        })?
+        .await
+        .map_err(|_| LspError {
+            code: LspErrorCode::RequestFailed,
+            message: "Failed to send populate edit".into(),
+        })?;
+
+    if !response.applied {
+        return Err(LspError {
+            code: LspErrorCode::RequestFailed,
+            message: "Failed to apply population edit".into(),
+        });
+    }
+
+    Ok(serde_json::to_value(()).expect("Failed to serialize ()!"))
+}
+
 pub(crate) async fn reload_document_impl(
     ctx: Option<&Rc<Context>>,
-    mut content: String,
+    content: String,
     url: lsp_types::Url,
     version: Option<i32>,
     document_cache: &mut common::DocumentCache,
-) -> HashMap<Url, Vec<lsp_types::Diagnostic>> {
+) -> (HashSet<PathBuf>, BuildDiagnostics) {
+    enum FileAction {
+        ProcessContent(String),
+        IgnoreFile,
+        InvalidateFile,
+    }
+
     let Some(path) = common::uri_to_file(&url) else { return Default::default() };
     // Normalize the URL
     let Ok(url) = Url::from_file_path(path.clone()) else { return Default::default() };
-    if path.extension().map_or(false, |e| e == "rs") {
-        content = match i_slint_compiler::lexer::extract_rust_macro(content) {
-            Some(content) => content,
+
+    let action = if path.extension().is_some_and(|e| e == "rs") {
+        match i_slint_compiler::lexer::extract_rust_macro(content) {
+            Some(content) => FileAction::ProcessContent(content),
             // A rust file without a rust macro, just ignore it
-            None => return [(url, vec![])].into_iter().collect(),
-        };
-    }
-
-    if let Some(ctx) = ctx {
-        ctx.server_notifier.send_message_to_preview(common::LspToPreviewMessage::SetContents {
-            url: common::VersionedUrl::new(url.clone(), version),
-            contents: content.clone(),
-        });
-    }
-    let dependencies = document_cache.invalidate_url(&url);
-    let mut diag = BuildDiagnostics::default();
-    let _ = document_cache.load_url(&url, version, content, &mut diag).await; // ignore url conversion errors
-
-    // Always provide diagnostics for all files. Empty diagnostics clear any previous ones.
-    let mut lsp_diags: HashMap<Url, Vec<lsp_types::Diagnostic>> =
-        core::iter::once(Url::from_file_path(&path).unwrap())
-            .chain(dependencies.iter().cloned())
-            .chain(diag.all_loaded_files.iter().filter_map(|p| Url::from_file_path(&p).ok()))
-            .map(|uri| (uri, Default::default()))
-            .collect();
-
-    for d in diag.into_iter() {
-        #[cfg(not(target_arch = "wasm32"))]
-        if d.source_file().unwrap().is_relative() {
-            continue;
+            None => {
+                if document_cache.get_document(&url).is_some() {
+                    // This had contents before: Continue so we can invalidate it!
+                    FileAction::InvalidateFile
+                } else {
+                    FileAction::IgnoreFile
+                }
+            }
         }
-        let uri = Url::from_file_path(d.source_file().unwrap()).unwrap();
-        lsp_diags.entry(uri).or_default().push(util::to_lsp_diag(&d));
+    } else {
+        FileAction::ProcessContent(content)
+    };
+
+    let mut diag = BuildDiagnostics::default();
+
+    let dependencies = match action {
+        FileAction::ProcessContent(content) => {
+            if let Some(ctx) = ctx {
+                ctx.server_notifier.send_message_to_preview(
+                    common::LspToPreviewMessage::SetContents {
+                        url: common::VersionedUrl::new(url.clone(), version),
+                        contents: content.clone(),
+                    },
+                );
+            }
+            let dependencies = document_cache.invalidate_url(&url);
+            let _ = document_cache.load_url(&url, version, content, &mut diag).await;
+            dependencies
+        }
+        FileAction::IgnoreFile => return Default::default(),
+        FileAction::InvalidateFile => {
+            if let Some(ctx) = ctx {
+                ctx.server_notifier.send_message_to_preview(
+                    common::LspToPreviewMessage::ForgetFile { url: url.clone() },
+                );
+            }
+            document_cache.invalidate_url(&url)
+        }
+    };
+
+    for dep in &dependencies {
+        if ctx.is_some_and(|ctx| ctx.open_urls.borrow().contains(dep)) {
+            document_cache.reload_cached_file(dep, &mut diag).await;
+        }
     }
 
-    lsp_diags
+    let extra_files =
+        dependencies.iter().filter_map(common::uri_to_file).chain(core::iter::once(path)).collect();
+
+    (extra_files, diag)
 }
 
 pub async fn open_document(
@@ -648,18 +800,56 @@ pub async fn reload_document(
     version: Option<i32>,
     document_cache: &mut common::DocumentCache,
 ) -> common::Result<()> {
-    let lsp_diags =
+    let (extra_files, diag) =
         reload_document_impl(Some(ctx), content, url.clone(), version, document_cache).await;
 
-    for (uri, diagnostics) in lsp_diags {
-        let version = document_cache.document_version(&uri);
-
-        ctx.server_notifier.send_notification::<lsp_types::notification::PublishDiagnostics>(
-            PublishDiagnosticsParams { uri, diagnostics, version },
-        )?;
-    }
+    send_diagnostics(&ctx.server_notifier, document_cache, &extra_files, diag);
 
     Ok(())
+}
+
+pub fn convert_diagnostics(
+    extra_files: &HashSet<PathBuf>,
+    diag: BuildDiagnostics,
+) -> HashMap<Url, Vec<lsp_types::Diagnostic>> {
+    // Always provide diagnostics for all files. Empty diagnostics clear any previous ones.
+    let mut lsp_diags: HashMap<Url, Vec<lsp_types::Diagnostic>> = extra_files
+        .iter()
+        .chain(diag.all_loaded_files.iter())
+        .filter_map(|p| Url::from_file_path(p).ok())
+        .map(|uri| (uri, Default::default()))
+        .collect();
+
+    for d in diag.into_iter() {
+        #[cfg(not(target_arch = "wasm32"))]
+        if d.source_file().unwrap().is_relative() {
+            continue;
+        }
+        let uri = Url::from_file_path(d.source_file().unwrap()).unwrap();
+        lsp_diags.entry(uri).or_default().push(util::to_lsp_diag(&d));
+    }
+
+    lsp_diags
+}
+
+fn send_diagnostics(
+    _server_notifier: &crate::ServerNotifier,
+    document_cache: &common::DocumentCache,
+    extra_files: &HashSet<PathBuf>,
+    diag: BuildDiagnostics,
+) {
+    let lsp_diags = convert_diagnostics(extra_files, diag);
+    for (uri, _diagnostics) in lsp_diags {
+        let _version = document_cache.document_version(&uri);
+
+        #[cfg(feature = "preview-engine")]
+        let _ = common::lsp_to_editor::notify_lsp_diagnostics(
+            _server_notifier,
+            uri,
+            _version,
+            _diagnostics,
+        );
+    }
 }
 
 pub async fn invalidate_document(ctx: &Rc<Context>, url: lsp_types::Url) -> common::Result<()> {
@@ -671,9 +861,25 @@ pub async fn invalidate_document(ctx: &Rc<Context>, url: lsp_types::Url) -> comm
     ctx.document_cache.borrow_mut().drop_document(&url)
 }
 
-pub async fn trigger_file_watcher(ctx: &Rc<Context>, url: lsp_types::Url) -> common::Result<()> {
+pub async fn delete_document(ctx: &Rc<Context>, url: lsp_types::Url) -> common::Result<()> {
+    // The preview cares about resources and slint files, so forward everything
+    ctx.server_notifier
+        .send_message_to_preview(common::LspToPreviewMessage::ForgetFile { url: url.clone() });
+
+    ctx.document_cache.borrow_mut().drop_document(&url)
+}
+
+pub async fn trigger_file_watcher(
+    ctx: &Rc<Context>,
+    url: lsp_types::Url,
+    typ: lsp_types::FileChangeType,
+) -> common::Result<()> {
     if !ctx.open_urls.borrow().contains(&url) {
-        invalidate_document(ctx, url).await?;
+        if typ == lsp_types::FileChangeType::DELETED {
+            delete_document(ctx, url).await?;
+        } else {
+            invalidate_document(ctx, url).await?;
+        }
     }
     Ok(())
 }
@@ -823,9 +1029,7 @@ fn get_code_actions(
                 .text()
                 .to_string()
                 .lines()
-                .map(
-                    |line| if line.is_empty() { line.to_string() } else { format!("    {}", line) },
-                )
+                .map(|line| if line.is_empty() { line.to_string() } else { format!("    {line}") })
                 .collect::<Vec<String>>();
             let edits = vec![TextEdit::new(
                 lsp_types::Range::new(r.start, r.end),
@@ -866,7 +1070,7 @@ fn get_code_actions(
                     NodeOrToken::Node(_) => is_sub_element(n.kind()),
                     NodeOrToken::Token(t) => {
                         t.kind() == SyntaxKind::Whitespace
-                            && t.next_sibling_or_token().map_or(false, |n| is_sub_element(n.kind()))
+                            && t.next_sibling_or_token().is_some_and(|n| is_sub_element(n.kind()))
                     }
                 })
                 .collect::<Vec<_>>();
@@ -1086,6 +1290,22 @@ fn get_document_symbols(
 
     r.sort_by(|a, b| a.range.start.cmp(&b.range.start));
 
+    #[cfg(debug_assertions)]
+    fn check_ranges(r: &[DocumentSymbol]) {
+        // Make sure that the selection range is inside the range as this causes JS error in vscode
+        for s in r {
+            assert!(
+                s.range.start <= s.selection_range.start && s.range.end >= s.selection_range.end,
+                "Invalid range for {s:?}",
+            );
+            if let Some(children) = &s.children {
+                check_ranges(children);
+            }
+        }
+    }
+    #[cfg(debug_assertions)]
+    check_ranges(&r);
+
     Some(r.into())
 }
 
@@ -1093,26 +1313,58 @@ fn get_code_lenses(
     document_cache: &mut common::DocumentCache,
     text_document: &lsp_types::TextDocumentIdentifier,
 ) -> Option<Vec<CodeLens>> {
-    if cfg!(any(feature = "preview-builtin", feature = "preview-external")) {
-        let doc = document_cache.get_document(&text_document.uri)?;
+    let doc = document_cache.get_document(&text_document.uri)?;
+    let version = document_cache.document_version(&text_document.uri);
 
+    let mut result = vec![];
+
+    if cfg!(any(feature = "preview-builtin", feature = "preview-external")) {
         let inner_components = doc.inner_components.clone();
 
-        let mut r = vec![];
-
         // Handle preview lens
-        r.extend(inner_components.iter().filter(|c| !c.is_global()).filter_map(|c| {
+        result.extend(inner_components.iter().filter(|c| !c.is_global()).filter_map(|c| {
             Some(CodeLens {
                 range: util::node_to_lsp_range(&c.root_element.borrow().debug.first()?.node),
                 command: Some(create_show_preview_command(true, &text_document.uri, c.id.as_str())),
                 data: None,
             })
         }));
-
-        Some(r)
-    } else {
-        None
     }
+
+    if let Some(node) = &doc.node {
+        let has_non_ws_token = node
+            .children_with_tokens()
+            .any(|nt| nt.kind() != SyntaxKind::Whitespace && nt.kind() != SyntaxKind::Eof);
+        if !has_non_ws_token {
+            if let Some(range) = populate_command_range(node) {
+                result.push(CodeLens {
+                    range,
+                    command: Some(create_populate_command(
+                        text_document.uri.clone(),
+                        version,
+                        "Start with Hello World!".to_string(),
+                        r#"import { AboutSlint, VerticalBox } from "std-widgets.slint";
+
+export component MainWindow inherits Window {
+    VerticalBox {
+        Text {
+            text: "Hello World!";
+        }
+        AboutSlint {
+            preferred-height: 150px;
+        }
+    }
+}
+"#
+                        .to_string(),
+                    )),
+                    data: None,
+                });
+            }
+        }
+    }
+
+    (!result.is_empty()).then_some(result)
 }
 
 /// If the token is matching a Element ID, return the list of all element id in the same component
@@ -1258,8 +1510,22 @@ pub async fn load_configuration(ctx: &Context) -> common::Result<()> {
         library_paths: cc.library_paths.clone(),
     };
     *ctx.preview_config.borrow_mut() = config.clone();
+    let mut diag = BuildDiagnostics::default();
+    let all_urls = document_cache.all_urls().collect::<Vec<_>>();
+    for url in &all_urls {
+        document_cache.reload_cached_file(url, &mut diag).await;
+    }
+
     ctx.server_notifier
         .send_message_to_preview(common::LspToPreviewMessage::SetConfiguration { config });
+
+    send_diagnostics(
+        &ctx.server_notifier,
+        document_cache,
+        &all_urls.iter().filter_map(common::uri_to_file).collect(),
+        diag,
+    );
+
     Ok(())
 }
 
@@ -1267,9 +1533,10 @@ pub async fn load_configuration(ctx: &Context) -> common::Result<()> {
 pub mod tests {
     use super::*;
 
+    use crate::language::test::{
+        complex_document_cache, loaded_document_cache, loaded_document_cache_with_file_name,
+    };
     use lsp_types::WorkspaceEdit;
-
-    use crate::language::test::{complex_document_cache, loaded_document_cache};
 
     #[test]
     fn test_reload_document_invalid_contents() {
@@ -1287,7 +1554,7 @@ pub mod tests {
         let (_, url, diag) =
             loaded_document_cache(r#"export component Main inherits Rectangle { }"#.into());
 
-        assert!(diag.len() == 1); // Only one URL is known
+        assert_eq!(diag.len(), 1); // Only one URL is known
         let diagnostics = diag.get(&url).expect("URL not found in result");
         assert!(diagnostics.is_empty());
     }
@@ -1504,6 +1771,36 @@ enum {}
         assert_eq!(tree!(1 0 1 0).name, "TouchArea");
         assert_eq!(tree!(1 0 1 0).detail, Some("ta".into()));
         check_start_with(tree!(1 0 1 0).range.start, "ta := TouchArea");
+    }
+
+    #[test]
+    fn test_document_symbols_syntax_error() {
+        let (mut dc, uri, _) =
+            loaded_document_cache(r#"component foo { xxx := {} /*--*/ yyy := }"#.into());
+        let result =
+            get_document_symbols(&mut dc, &lsp_types::TextDocumentIdentifier { uri }).unwrap();
+        let mk_range = |r: std::ops::Range<u32>| {
+            lsp_types::Range::new(Position::new(0, r.start), Position::new(0, r.end))
+        };
+
+        if let DocumentSymbolResponse::Nested(result) = result {
+            assert_eq!(result.len(), 1);
+            assert_eq!(result[0].name, "foo");
+            assert_eq!(result[0].range, mk_range(0..41));
+            assert_eq!(result[0].selection_range, mk_range(10..13));
+            let children = result[0].children.as_ref().unwrap();
+            assert_eq!(children.len(), 2);
+            assert_eq!(children[0].name, "<error>");
+            assert_eq!(children[0].range, mk_range(16..25));
+            assert_eq!(children[0].detail, Some("xxx".into()));
+            assert_eq!(children[0].selection_range, mk_range(23..23));
+            assert_eq!(children[1].name, "<error>");
+            assert_eq!(children[1].range, mk_range(33..40));
+            assert_eq!(children[1].detail, Some("yyy".into()));
+            assert_eq!(children[1].selection_range, mk_range(40..40));
+        } else {
+            unreachable!();
+        }
     }
 
     #[test]
@@ -1776,6 +2073,165 @@ export component TestWindow inherits Window {
                 }),
                 ..Default::default()
             }),])
+        );
+    }
+
+    #[test]
+    fn test_hello_world_code_lens_slint_file() {
+        // Empty slint document:
+        let (mut dc, url, _) = loaded_document_cache(
+            "
+  \t
+\t     \t
+
+"
+            .into(),
+        );
+
+        assert_eq!(
+            get_code_lenses(&mut dc, &lsp_types::TextDocumentIdentifier { uri: url.clone() }),
+            Some(vec![lsp_types::CodeLens {
+                range: lsp_types::Range::new(
+                    lsp_types::Position::new(0, 0),
+                    lsp_types::Position::new(4, 0)
+                ),
+                command: Some(lsp_types::Command {
+                    title: "Start with Hello World!".to_string(),
+                    command: POPULATE_COMMAND.to_string(),
+                    arguments: Some(vec![
+                        serde_json::to_value(lsp_types::OptionalVersionedTextDocumentIdentifier {
+                            uri: url,
+                            version: Some(42)
+                        })
+                        .unwrap(),
+                        r#"import { AboutSlint, VerticalBox } from "std-widgets.slint";
+
+export component MainWindow inherits Window {
+    VerticalBox {
+        Text {
+            text: "Hello World!";
+        }
+        AboutSlint {
+            preferred-height: 150px;
+        }
+    }
+}
+"#
+                        .into()
+                    ]),
+                }),
+                data: None,
+            }])
+        );
+    }
+
+    #[test]
+    fn test_hello_world_code_lens_rust_file() {
+        // Empty slint document in rust macro:
+        let (mut dc, url, _) = loaded_document_cache_with_file_name(
+            "
+use slint::Model;
+
+slint!(\t
+  \t
+\t       \t
+
+)
+
+fn main() {{
+    println!(\"Hello World\");
+}}
+"
+            .into(),
+            "bar.rs",
+        );
+
+        assert_eq!(
+            get_code_lenses(&mut dc, &lsp_types::TextDocumentIdentifier { uri: url.clone() }),
+            Some(vec![lsp_types::CodeLens {
+                range: lsp_types::Range::new(
+                    lsp_types::Position::new(3, 7),
+                    lsp_types::Position::new(7, 0)
+                ),
+                command: Some(lsp_types::Command {
+                    title: "Start with Hello World!".to_string(),
+                    command: POPULATE_COMMAND.to_string(),
+                    arguments: Some(vec![
+                        serde_json::to_value(lsp_types::OptionalVersionedTextDocumentIdentifier {
+                            uri: url,
+                            version: Some(42)
+                        })
+                        .unwrap(),
+                        r#"import { AboutSlint, VerticalBox } from "std-widgets.slint";
+
+export component MainWindow inherits Window {
+    VerticalBox {
+        Text {
+            text: "Hello World!";
+        }
+        AboutSlint {
+            preferred-height: 150px;
+        }
+    }
+}
+"#
+                        .into()
+                    ]),
+                }),
+                data: None,
+            }])
+        );
+    }
+
+    #[cfg(any(feature = "preview-external", feature = "preview-engine"))]
+    #[test]
+    fn test_show_preview_code_lens() {
+        // Empty slint document:
+        let (mut dc, url, _) = loaded_document_cache(
+            r#"
+component Internal { }
+
+export component Test {
+
+}
+"#
+            .into(),
+        );
+
+        assert_eq!(
+            get_code_lenses(&mut dc, &lsp_types::TextDocumentIdentifier { uri: url.clone() }),
+            Some(vec![
+                lsp_types::CodeLens {
+                    range: lsp_types::Range::new(
+                        lsp_types::Position::new(1, 19),
+                        lsp_types::Position::new(1, 22)
+                    ),
+                    command: Some(lsp_types::Command {
+                        title: "▶ Show Preview".to_string(),
+                        command: SHOW_PREVIEW_COMMAND.to_string(),
+                        arguments: Some(vec![
+                            serde_json::to_value(url.clone()).unwrap(),
+                            "Internal".into()
+                        ]),
+                    }),
+                    data: None,
+                },
+                lsp_types::CodeLens {
+                    range: lsp_types::Range::new(
+                        lsp_types::Position::new(3, 22),
+                        lsp_types::Position::new(5, 1)
+                    ),
+                    command: Some(lsp_types::Command {
+                        title: "▶ Show Preview".to_string(),
+                        command: SHOW_PREVIEW_COMMAND.to_string(),
+                        arguments: Some(vec![
+                            serde_json::to_value(url.clone()).unwrap(),
+                            "Test".into()
+                        ])
+                    }),
+                    data: None,
+                }
+            ])
         );
     }
 }

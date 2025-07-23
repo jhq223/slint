@@ -1,16 +1,22 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
-use super::token_info::TokenInfo;
-use crate::common::DocumentCache;
+use crate::common::{
+    self,
+    token_info::{token_info, TokenInfo},
+};
+use crate::util;
 use i_slint_compiler::langtype::{ElementType, Type};
 use i_slint_compiler::object_tree::ElementRc;
 use i_slint_compiler::parser::SyntaxToken;
 use itertools::Itertools as _;
 use lsp_types::{Hover, HoverContents, MarkupContent};
 
-pub fn get_tooltip(document_cache: &mut DocumentCache, token: SyntaxToken) -> Option<Hover> {
-    let token_info = crate::language::token_info::token_info(document_cache, token)?;
+pub fn get_tooltip(
+    document_cache: &mut common::DocumentCache,
+    token: SyntaxToken,
+) -> Option<Hover> {
+    let token_info = token_info(document_cache, token.clone())?;
     let contents = match token_info {
         TokenInfo::Type(ty) => from_plain_text(ty.to_string()),
         TokenInfo::ElementType(e) => match e {
@@ -37,13 +43,25 @@ pub fn get_tooltip(document_cache: &mut DocumentCache, token: SyntaxToken) -> Op
         }
         TokenInfo::NamedReference(nr) => from_property_in_element(&nr.element(), nr.name())?,
         TokenInfo::EnumerationValue(v) => from_slint_code(&format!("{}.{}", v.enumeration.name, v)),
-        TokenInfo::FileName(_) => return None,
+        TokenInfo::FileName(path) => MarkupContent {
+            kind: lsp_types::MarkupKind::Markdown,
+            value: format!("`{}`", path.to_string_lossy()),
+        },
+        TokenInfo::Image(path) => MarkupContent {
+            kind: lsp_types::MarkupKind::Markdown,
+            value: format!("![{0}]({0})", path.to_string_lossy()),
+        },
         // Todo: this can happen when there is some syntax error
-        TokenInfo::LocalProperty(_) | TokenInfo::LocalCallback(_) => return None,
+        TokenInfo::LocalProperty(_) | TokenInfo::LocalCallback(_) | TokenInfo::LocalFunction(_) => {
+            return None
+        }
         TokenInfo::IncompleteNamedReference(el, name) => from_property_in_type(&el, &name)?,
     };
 
-    Some(Hover { contents: HoverContents::Markup(contents), range: None })
+    Some(Hover {
+        contents: HoverContents::Markup(contents),
+        range: Some(util::token_to_lsp_range(&token)),
+    })
 }
 
 fn from_property_in_element(element: &ElementRc, name: &str) -> Option<MarkupContent> {
@@ -68,10 +86,10 @@ fn from_property_in_type(base: &ElementType, name: &str) -> Option<MarkupContent
 fn property_tooltip(ty: &Type, name: &str, pure: bool) -> Option<MarkupContent> {
     let pure = if pure { "pure " } else { "" };
     if let Type::Callback(callback) = ty {
-        let sig = signature_from_function_ty(&callback);
+        let sig = signature_from_function_ty(callback);
         Some(from_slint_code(&format!("{pure}callback {name}{sig}")))
     } else if let Type::Function(function) = &ty {
-        let sig = signature_from_function_ty(&function);
+        let sig = signature_from_function_ty(function);
         Some(from_slint_code(&format!("{pure}function {name}{sig}")))
     } else if ty.is_property_type() {
         Some(from_slint_code(&format!("property <{ty}> {name}")))
@@ -151,6 +169,12 @@ export component Test {
   StandardTableView {
     row-pointer-event => { }
   }
+  Image {
+      source: @image-url("assets/unix-test.png");
+  }
+  Image {
+      source: @image-url("assets\\windows-test.png");
+  }
 }"#;
         let (mut dc, uri, _) = crate::language::test::loaded_document_cache(source.into());
         let doc = dc.get_document(&uri).unwrap().node.clone().unwrap();
@@ -214,7 +238,7 @@ export component Test {
         assert_tooltip(
             get_tooltip(&mut dc, find_tk("row-pointer-event", 0.into())),
             // Fixme: this uses LogicalPoint instead of Point because of implementation details
-            "```slint\ncallback row-pointer-event(row-index: int, event: PointerEvent, mouse-position: LogicalPosition)\n```",
+            "```slint\ncallback row-pointer-event(row: int, event: PointerEvent, position: LogicalPosition)\n```",
         );
         assert_tooltip(
             get_tooltip(&mut dc, find_tk("pointer-event", 5.into())),
@@ -252,6 +276,32 @@ export component Test {
         assert_tooltip(
             get_tooltip(&mut dc, find_tk("the-ta := TA {", 11.into())),
             "```slint\ncomponent TA\n```",
+        );
+
+        // @image-url
+        let target_path = uri
+            .join("assets/unix-test.png")
+            .unwrap()
+            .to_file_path()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert_tooltip(
+            get_tooltip(&mut dc, find_tk("\"assets/unix-test.png\"", 15.into())),
+            &format!("![{target_path}]({target_path})"),
+        );
+
+        // @image-url
+        let target_path = uri
+            .join("assets/windows-test.png")
+            .unwrap()
+            .to_file_path()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert_tooltip(
+            get_tooltip(&mut dc, find_tk("\"assets\\\\windows-test.png\"", 15.into())),
+            &format!("![{target_path}]({target_path})"),
         );
 
         // enums

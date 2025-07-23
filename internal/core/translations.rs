@@ -21,14 +21,20 @@ mod formatter {
     }
 
     impl<T: Display> FormatArgs for [T] {
-        type Output<'a> = &'a T where T: 'a;
+        type Output<'a>
+            = &'a T
+        where
+            T: 'a;
         fn from_index(&self, index: usize) -> Option<&T> {
             self.get(index)
         }
     }
 
     impl<const N: usize, T: Display> FormatArgs for [T; N] {
-        type Output<'a> = &'a T where T: 'a;
+        type Output<'a>
+            = &'a T
+        where
+            T: 'a;
         fn from_index(&self, index: usize) -> Option<&T> {
             self.get(index)
         }
@@ -46,7 +52,7 @@ mod formatter {
         args: &'a T,
     }
 
-    impl<'a, T: FormatArgs + ?Sized> Display for FormatResult<'a, T> {
+    impl<T: FormatArgs + ?Sized> Display for FormatResult<'_, T> {
         fn fmt(&self, f: &mut Formatter<'_>) -> Result {
             let mut arg_idx = 0;
             let mut pos = 0;
@@ -112,6 +118,7 @@ mod formatter {
     mod tests {
         use super::format;
         use core::fmt::Display;
+        use std::string::{String, ToString};
         #[test]
         fn test_format() {
             assert_eq!(format("Hello", (&[]) as &[String]).to_string(), "Hello");
@@ -153,8 +160,9 @@ impl<T: Display> Display for DisplayOrInt<T> {
     }
 }
 
-impl<'a, T: FormatArgs + ?Sized> FormatArgs for WithPlural<'a, T> {
-    type Output<'b> = DisplayOrInt<T::Output<'b>>
+impl<T: FormatArgs + ?Sized> FormatArgs for WithPlural<'_, T> {
+    type Output<'b>
+        = DisplayOrInt<T::Output<'b>>
     where
         Self: 'b;
 
@@ -191,14 +199,21 @@ pub fn translate(
 }
 
 #[cfg(all(target_family = "unix", feature = "gettext-rs"))]
-fn translate_gettext(string: &str, ctx: &str, domain: &str, n: i32, plural: &str) -> String {
+fn translate_gettext(
+    string: &str,
+    ctx: &str,
+    domain: &str,
+    n: i32,
+    plural: &str,
+) -> std::string::String {
+    use std::string::String;
     global_translation_property();
     fn mangle_context(ctx: &str, s: &str) -> String {
-        format!("{}\u{4}{}", ctx, s)
+        std::format!("{ctx}\u{4}{s}")
     }
     fn demangle_context(r: String) -> String {
         if let Some(x) = r.split('\u{4}').last() {
-            return x.to_owned();
+            return x.into();
         }
         r
     }
@@ -327,7 +342,7 @@ fn index_for_locale(languages: &[&'static str]) -> Option<usize> {
     // first, try an exact match
     let idx = languages.iter().position(|x| *x == locale);
     // else, only match the language part
-    fn base<'a>(l: &'a str) -> &'a str {
+    fn base(l: &str) -> &str {
         l.find(['-', '_', '@']).map_or(l, |i| &l[..i])
     }
     idx.or_else(|| {
@@ -336,24 +351,32 @@ fn index_for_locale(languages: &[&'static str]) -> Option<usize> {
     })
 }
 
+#[i_slint_core_macros::slint_doc]
 /// Select the current translation language when using bundled translations.
+///
 /// This function requires that the application's `.slint` file was compiled with bundled translations..
 /// It must be called after creating the first component.
+///
+/// The language string is the locale, which matches the name of the folder that contains the `LC_MESSAGES` folder.
+/// An empty string or `"en"` will select the default language.
+///
 /// Returns `Ok` if the language was selected; [`SelectBundledTranslationError`] otherwise.
-pub fn select_bundled_translation(locale: &str) -> Result<(), SelectBundledTranslationError> {
+///
+/// See also the [Translation documentation](slint:translations).
+pub fn select_bundled_translation(language: &str) -> Result<(), SelectBundledTranslationError> {
     crate::context::GLOBAL_CONTEXT.with(|ctx| {
         let Some(ctx) = ctx.get() else {
-            return Err(SelectBundledTranslationError::NoLanguageBundled);
+            return Err(SelectBundledTranslationError::NoTranslationsBundled);
         };
         let languages = ctx.0.translations_bundle_languages.borrow();
         let Some(languages) = &*languages else {
-            return Err(SelectBundledTranslationError::NoLanguageBundled);
+            return Err(SelectBundledTranslationError::NoTranslationsBundled);
         };
-        let idx = languages.iter().position(|x| *x == locale);
+        let idx = languages.iter().position(|x| *x == language);
         if let Some(idx) = idx {
             ctx.0.translations_dirty.as_ref().set(idx);
             Ok(())
-        } else if locale == "" || locale == "en" {
+        } else if language.is_empty() || language == "en" {
             ctx.0.translations_dirty.as_ref().set(0);
             Ok(())
         } else {
@@ -369,8 +392,9 @@ pub fn select_bundled_translation(locale: &str) -> Result<(), SelectBundledTrans
 pub enum SelectBundledTranslationError {
     /// The language was not found. The list of available languages is included in this error variant.
     LanguageNotFound { available_languages: crate::SharedVector<SharedString> },
-    /// There are no bundled languages. Either [`select_bundled_translation`] was called before creating a component, or the application's `.slint` file was compiled without the bundle translation option.
-    NoLanguageBundled,
+    /// There are no bundled translations. Either [`select_bundled_translation`] was called before creating a component,
+    /// or the application's `.slint` file was compiled without the bundle translation option.
+    NoTranslationsBundled,
 }
 
 impl core::fmt::Display for SelectBundledTranslationError {
@@ -379,8 +403,8 @@ impl core::fmt::Display for SelectBundledTranslationError {
             SelectBundledTranslationError::LanguageNotFound { available_languages } => {
                 write!(f, "The specified language was not found. Available languages are: {available_languages:?}")
             }
-            SelectBundledTranslationError::NoLanguageBundled => {
-                write!(f, "There are no bundled languages. Either select_bundled_translation was called before creating a component, or the application's `.slint` file was compiled without the bundle translation option")
+            SelectBundledTranslationError::NoTranslationsBundled => {
+                write!(f, "There are no bundled translations. Either select_bundled_translation was called before creating a component, or the application's `.slint` file was compiled without the bundle translation option")
             }
         }
     }
@@ -396,7 +420,7 @@ mod ffi {
     use crate::slice::Slice;
 
     /// Perform the translation and formatting.
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub extern "C" fn slint_translate(
         to_translate: &mut SharedString,
         context: &SharedString,
@@ -406,17 +430,17 @@ mod ffi {
         plural: &SharedString,
     ) {
         *to_translate =
-            translate(to_translate.as_str(), &context, &domain, arguments.as_slice(), n, &plural)
+            translate(to_translate.as_str(), context, domain, arguments.as_slice(), n, plural)
     }
 
     /// Mark all translated string as dirty to perform re-translation in case the language change
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub extern "C" fn slint_translations_mark_dirty() {
         mark_all_translations_dirty();
     }
 
     /// Safety: The slice must contain valid null-terminated utf-8 strings
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slint_translate_from_bundle(
         strs: Slice<*const core::ffi::c_char>,
         arguments: Slice<SharedString>,
@@ -441,7 +465,7 @@ mod ffi {
     /// (where indices[-1] is 0)
     ///
     /// Safety; the strs must be pointer to valid null-terminated utf-8 strings
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slint_translate_from_bundle_with_plural(
         strs: Slice<*const core::ffi::c_char>,
         indices: Slice<u32>,
@@ -476,7 +500,7 @@ mod ffi {
             .unwrap();
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub extern "C" fn slint_translate_set_bundled_languages(languages: Slice<Slice<'static, u8>>) {
         let languages = languages
             .iter()
@@ -485,9 +509,9 @@ mod ffi {
         set_bundled_languages(&languages);
     }
 
-    #[no_mangle]
-    pub extern "C" fn slint_translate_select_bundled_translation(locale: Slice<u8>) -> bool {
-        let locale = core::str::from_utf8(&locale).unwrap();
-        return select_bundled_translation(locale).is_ok();
+    #[unsafe(no_mangle)]
+    pub extern "C" fn slint_translate_select_bundled_translation(language: Slice<u8>) -> bool {
+        let language = core::str::from_utf8(&language).unwrap();
+        select_bundled_translation(language).is_ok()
     }
 }

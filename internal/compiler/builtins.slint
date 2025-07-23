@@ -78,6 +78,7 @@ export component ComponentContainer inherits Empty {
 
     in-out property <length> width;
     in-out property <length> height;
+    //-accepts_focus
 }
 
 export component Rotate inherits Empty {
@@ -94,7 +95,7 @@ component SimpleText inherits Empty {
     in property <string> text;
     in property <length> font-size;
     in property <int> font-weight;
-    in property <brush> color;  // Palette.default-text-color  set in apply_default_properties_from_style
+    in property <brush> color;  // StyleMetrics.default-text-color  set in apply_default_properties_from_style
     in property <TextHorizontalAlignment> horizontal-alignment;
     in property <TextVerticalAlignment> vertical-alignment;
     //-default_size_binding:implicit_size
@@ -136,7 +137,9 @@ export component FocusScope {
     out property <bool> has-focus;
     callback key_pressed(event: KeyEvent) -> EventResult;
     callback key_released(event: KeyEvent) -> EventResult;
-    callback focus_changed_event();
+    callback focus_changed_event(reason: FocusReason);
+    callback focus_gained(reason: FocusReason);
+    callback focus_lost(reason: FocusReason);
     //-default_size_binding:expands_to_parent_geometry
     //-accepts_focus
 }
@@ -183,40 +186,97 @@ export component SwipeGestureHandler {
     //-default_size_binding:expands_to_parent_geometry
 }
 
-// Lowered to MenuBarImpl from the style
+export component DragArea {
+    in property <bool> enabled: true;
+    //out property <bool> dragging;
+    in property <string> mime-type;
+    in property <string> data;
+    //-default_size_binding:expands_to_parent_geometry
+
+}
+export component DropArea {
+    in property <bool> enabled: true;
+    callback can-drop(event: DropEvent) -> bool;
+    callback dropped(event: DropEvent);
+    out property <bool> contains-drag;
+    //-default_size_binding:expands_to_parent_geometry
+}
+
+component MenuItem {
+    in property <string> title;
+    callback activated();
+    in property <bool> enabled: true;
+    in property <image> icon;
+    //-disallow_global_types_as_child_elements
+    //-is_non_item_type
+}
+
+component MenuSeparator {
+    //-disallow_global_types_as_child_elements
+    //-is_non_item_type
+}
+
+component Menu {
+    in property <string> title;
+    in property <bool> enabled: true;
+    in property <image> icon;
+    MenuItem {}
+    MenuSeparator {}
+    Menu {}
+    //-disallow_global_types_as_child_elements
+    //-is_non_item_type
+}
+
+// Lowered in lower_menus pass. See that pass documentation for more info
 component MenuBar {
     //-is_non_item_type
     //-disallow_global_types_as_child_elements
-    in property <[MenuEntry]> entries;
+    Menu {}
+}
 
+// The NativeItem, exported as ContextMenuInternal for the style
+component ContextMenu inherits Empty {
     callback activated(entry: MenuEntry);
     callback sub-menu(entry: MenuEntry) -> [MenuEntry];
+    callback show(position: Point);
+    function close() {
+    }
+    function is-open() -> bool {
+    }
+    in property <bool> enabled: true;
+}
 
-    // Currently experimental
+// Lowered in lower_menus pass.
+export component ContextMenuInternal inherits ContextMenu {
+    in property <[MenuEntry]> entries;
+    //-default_size_binding:expands_to_parent_geometry
     //-is_internal
 }
 
-// Lowered to a call that generate a ContextMenuImpl
-export component ContextMenu {
-    function show() {}
-    //in property <[MenuEntry]> entries;
-    callback activated(entry: MenuEntry);
-    callback sub-menu(entry: MenuEntry) -> [MenuEntry];
+// The public ContextMenu which is lowered in the lower_menus pass. See that pass documentation for more info
+// Note that this element cannot be named `ContextMenu` because that's the same name as a native item,
+// and the load_builtins code doesn't allow that. So use a placeholder name and re-export under `ContextMenu`
+export component ContextMenuArea inherits Empty {
+    // This is actually function as part of out interface, but a callback as much is the runtime concerned
+    callback show(position: Point);
+    function close() {
+    }
     //-default_size_binding:expands_to_parent_geometry
+    Menu { }
 
-    // Currently experimental
-    //-is_internal
+    in property <bool> enabled: true;
 }
 
 component WindowItem {
     in-out property <length> width;
     in-out property <length> height;
-    in property <brush> background; // Palette.background  set in apply_default_properties_from_style
+    in property <brush> background; // StyleMetrics.background  set in apply_default_properties_from_style
     in property <brush> color <=> background;
     in property <string> title: "Slint Window";
     in property <bool> no-frame;
     in property <length> resize-border-width;
     in property <bool> always-on-top;
+    in-out property <bool> full-screen;
     in property <string> default-font-family;
     in-out property <length> default-font-size; // <=> StyleMetrics.default-font-size  set in apply_default_properties_from_style
     in property <int> default-font-weight;
@@ -243,15 +303,16 @@ export component TextInput {
     in property <length> font-size;
     in property <bool> font-italic;
     in property <int> font-weight;
-    in property <brush> color; // Palette.default-text-color  set in apply_default_properties_from_style
-    in property <color> selection-foreground-color; // Palette.selection-foreground set in apply_default_properties_from_style
-    in property <color> selection-background-color; // Palette.selection-background set in apply_default_properties_from_style
+    in property <brush> color; // StyleMetrics.default-text-color  set in apply_default_properties_from_style
+    in property <color> selection-foreground-color; // StyleMetrics.selection-foreground set in apply_default_properties_from_style
+    in property <color> selection-background-color; // StyleMetrics.selection-background set in apply_default_properties_from_style
     in property <TextHorizontalAlignment> horizontal-alignment;
     in property <TextVerticalAlignment> vertical-alignment;
     in property <TextWrap> wrap;
     in property <length> letter-spacing;
     in property <length> width;
     in property <length> height;
+    in property <length> page-height;
     in property <length> text-cursor-width; // StyleMetrics.text-cursor-width  set in apply_default_properties_from_style
     in property <InputType> input-type;
     // Internal, undocumented property, only exposed for tests.
@@ -260,9 +321,10 @@ export component TextInput {
     out property <int> anchor-position-byte-offset;
     out property <bool> has-focus;
     callback accepted;
-    callback rejected;
     callback edited;
     callback cursor_position_changed(position: Point);
+    callback key_pressed(event: KeyEvent) -> EventResult;
+    callback key_released(event: KeyEvent) -> EventResult;
     in property <bool> enabled: true;
     in property <bool> single-line: true;
     in property <bool> read-only: false;
@@ -398,12 +460,14 @@ export component Path {
     in property <FillRule> fill-rule;
     in property <brush> stroke;
     in property <length> stroke-width;
+    in property <LineCap> stroke-line-cap;
     in property <string> commands;  // 'fake' hardcoded in typeregister.rs
     in property <float> viewbox-x;
     in property <float> viewbox-y;
     in property <float> viewbox-width;
     in property <float> viewbox-height;
     in property <bool> clip;
+    in property <bool> anti-alias: true;
 
     //-disallow_global_types_as_child_elements
     MoveTo { }
@@ -455,6 +519,12 @@ export component Timer {
     in property <duration> interval;
     callback triggered;
     in property <bool> running: true;
+    function start() {
+    }
+    function stop() {
+    }
+    function restart() {
+    }
     //-is_non_item_type
     //-disallow_global_types_as_child_elements
 }
@@ -472,6 +542,11 @@ component PropertyAnimation {
 
 export global TextInputInterface {
     in property <bool> text-input-focused;
+}
+
+export global Platform {
+    out property <OperatingSystemType> os;
+    out property <string> style-name;
 }
 
 export component NativeButton {
@@ -520,6 +595,7 @@ export component NativeSlider {
     in-out property <float> value;
     in property <float> minimum;
     in property <float> maximum: 100;
+    in property <float> step: 1;
     in property <Orientation> orientation: Orientation.horizontal;
     callback changed(value: float);
     callback released(value: float);
@@ -566,8 +642,8 @@ export component NativeScrollView {
     out property <length> native-padding-top;
     out property <length> native-padding-bottom;
     in property <bool> has_focus;
-    in property <ScrollBarPolicy> vertical-bar-policy;
-    in property <ScrollBarPolicy> horizontal-bar-policy;
+    in property <ScrollBarPolicy> vertical-scrollbar-policy;
+    in property <ScrollBarPolicy> horizontal-scrollbar-policy;
     in property <bool> enabled: true;
     //-default_size_binding:expands_to_parent_geometry
     //-is_internal
@@ -575,7 +651,6 @@ export component NativeScrollView {
 
 export component NativeStandardListViewItem {
     in property <int> index;
-    in property <int> total-items;
     in property <StandardListViewItem> item;
     in-out property <bool> is_selected;
     in property <bool> has_hover;

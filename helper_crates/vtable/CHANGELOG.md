@@ -3,6 +3,14 @@
 # Changelog
 All notable changes to this crate will be documented in this file.
 
+## [0.3.0]
+
+ - Don't automatically add "extern C" to the function that do not have it.
+
+## [0.2.1] - 2024-12-18
+
+ - Fixed Warnings
+
 ## [0.2.0] - 2024-03-14
 
  - Make `Dyn` not Send or Sync, thereby fixing a soundness hole

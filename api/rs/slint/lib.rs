@@ -11,13 +11,13 @@
 This crate is the main entry point for embedding user interfaces designed with
 [Slint](https://slint.rs/) in Rust programs.
 */
-#![doc = concat!("If you are new to Slint, start with the [Walk-through **tutorial**](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint/src/quickstart)")]
+#![doc = i_slint_core_macros::slint_doc_str!("If you are new to Slint, start with the [Walk-through **tutorial**](slint:quickstart).")]
 /*! If you are already familiar with Slint, the following topics provide related information.
 
 ## Topics
 
 */
-#![doc = concat!("- [The Slint Language Documentation](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint)")]
+#![doc = i_slint_core_macros::slint_doc_str!("- [The Slint Language Documentation](slint:index)")]
 /*! - [Type mappings between .slint and Rust](docs::type_mappings)
  - [Feature flags and backend selection](docs::cargo_features)
  - [Slint on Microcontrollers](docs::mcu)
@@ -30,7 +30,7 @@ of including them in Rust:
  - The `.slint` code is [inline in a macro](#the-slint-code-in-a-macro).
  - The `.slint` code in [external files compiled with `build.rs`](#the-slint-code-in-external-files-is-compiled-with-buildrs)
 */
-#![doc = concat!(" - The `.slint` code is loaded dynamically at run-time from the file system, by using the [interpreter API](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/rust/slint_interpreter/).")]
+#![doc = i_slint_core_macros::slint_doc_str!(" - The `.slint` code is loaded dynamically at run-time from the file system, by using the [interpreter API](slint:rust:slint_interpreter/).")]
 /*!
 
 With the first two methods, the markup code is translated to Rust code and each component is turned into a Rust
@@ -42,9 +42,9 @@ information about the generation functions and how to use them.
 
 This method combines your Rust code with the `.slint` design markup in one file, using a macro:
 
-```rust
+```rust,no_run
 slint::slint!{
-    export component HelloWorld {
+    export component HelloWorld inherits Window {
         Text {
             text: "hello world";
             color: green;
@@ -52,19 +52,21 @@ slint::slint!{
     }
 }
 fn main() {
-#   return; // Don't run a window in an example
     HelloWorld::new().unwrap().run().unwrap();
 }
 ```
 
 ### The .slint code in external files is compiled with `build.rs`
 
-When your design becomes bigger in terms of markup code, you may want move it to a dedicated*/
-#![doc = concat!("`.slint` file. It's also possible to split a `.slint` file into multiple files using [modules](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint/src/language/syntax/modules.html).")]
+When your design becomes bigger in terms of markup code, you may want move it to a dedicated
+`.slint` file. */
+#![doc = i_slint_core_macros::slint_doc_str!("It's also possible to split a `.slint` file into multiple files using [modules](slint:modules).")]
 /*!Use a [build script](https://doc.rust-lang.org/cargo/reference/build-scripts.html) to compile
 your main `.slint` file:
 
-In your Cargo.toml add a `build` assignment and use the `slint-build` crate in `build-dependencies`:
+*/
+#![doc = i_slint_core_macros::slint_doc_str!("In your Cargo.toml add a `build` assignment and use the [`slint-build`](slint:rust:slint_build/) crate in `build-dependencies`:")]
+/*!
 
 ```toml
 [package]
@@ -73,11 +75,11 @@ build = "build.rs"
 edition = "2021"
 
 [dependencies]
-slint = "1.8.0"
+slint = "1.12"
 ...
 
 [build-dependencies]
-slint-build = "1.8.0"
+slint-build = "1.12"
 ```
 
 Use the API of the slint-build crate in the `build.rs` file:
@@ -123,7 +125,7 @@ export component MyComponent inherits Window { /*...*/ }
 
 in the .slint file, it will create a
 ```rust
-struct MyComponent{ /*...*/ }
+struct MyComponent { /*...*/ }
 ```
 
 See also our [sample component](docs::generated_code::SampleComponent) for more information about the API of the generated struct.
@@ -173,7 +175,7 @@ To run an async function or a future, use [`spawn_local()`].
 ## Exported Global singletons
 
 */
-#![doc = concat!("When you export a [global singleton](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint/src/language/syntax/globals.html) from the main file,")]
+#![doc = i_slint_core_macros::slint_doc_str!("When you export a [global singleton](slint:globals) from the main file,")]
 /*! it is also generated with the exported name. Like the main component, the generated struct have
 inherent method to access the properties and callback:
 
@@ -198,6 +200,9 @@ each instance will have their own instance of associated globals singletons.
 #![doc(html_logo_url = "https://slint.dev/logo/slint-logo-square-light.svg")]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::needless_doctest_main)] // We document how to write a main function
+
+#[cfg(target_env = "musl")]
+compile_error!("Compiling with MUSL is not supported by this crate.");
 
 extern crate alloc;
 
@@ -286,7 +291,7 @@ pub fn run_event_loop_until_quit() -> Result<(), PlatformError> {
 /// Futures from the [smol](https://docs.rs/smol/latest/smol/) runtime always hand off their work to
 /// separate I/O threads that run in parallel to the Slint event loop.
 ///
-/// The [Tokio](https://docs.rs/tokio/latest/tokio/index.html) runtime is to the following constraints:
+/// The [Tokio](https://docs.rs/tokio/latest/tokio/index.html) runtime is subject to the following constraints:
 ///
 /// * Tokio futures require entering the context of a global Tokio runtime.
 /// * Tokio futures aren't guaranteed to hand off their work to separate threads and may therefore not complete, because
@@ -346,11 +351,12 @@ pub fn spawn_local<F: core::future::Future + 'static>(
         .map_err(|_| EventLoopError::NoEventLoopProvider)?
 }
 
+#[i_slint_core_macros::slint_doc]
 /// Include the code generated with the slint-build crate from the build script. After calling `slint_build::compile`
 /// in your `build.rs` build script, the use of this macro includes the generated Rust code and makes the exported types
 /// available for you to instantiate.
 ///
-/// Check the documentation of the `slint-build` crate for more information.
+/// Check the documentation of the [`slint-build`](slint:rust:slint_build) crate for more information.
 #[macro_export]
 macro_rules! include_modules {
     () => {
@@ -358,6 +364,7 @@ macro_rules! include_modules {
     };
 }
 
+#[i_slint_core_macros::slint_doc]
 /// Initialize translations when using the `gettext` feature.
 ///
 /// Call this in your main function with the path where translations are located.
@@ -370,6 +377,8 @@ macro_rules! include_modules {
 /// where `dirname` is the directory passed as an argument to this macro,
 /// `locale` is a locale name (e.g., `en`, `en_GB`, `fr`), and
 /// `crate` is the package name obtained from the `CARGO_PKG_NAME` environment variable.
+///
+/// See also the [Translation documentation](slint:translations).
 ///
 /// ### Example
 /// ```rust
@@ -405,15 +414,13 @@ macro_rules! init_translations {
 pub mod platform {
     pub use i_slint_core::platform::*;
 
-    pub use i_slint_backend_selector::PlatformBuilder;
-
     /// This module contains the [`femtovg_renderer::FemtoVGRenderer`] and related types.
     ///
     /// It is only enabled when the `renderer-femtovg` Slint feature is enabled.
     #[cfg(all(feature = "renderer-femtovg", not(target_os = "android")))]
     pub mod femtovg_renderer {
-        pub use i_slint_renderer_femtovg::FemtoVGRenderer;
-        pub use i_slint_renderer_femtovg::OpenGLInterface;
+        pub use i_slint_renderer_femtovg::opengl::OpenGLInterface;
+        pub use i_slint_renderer_femtovg::FemtoVGOpenGLRenderer as FemtoVGRenderer;
     }
 }
 
@@ -426,13 +433,177 @@ pub mod platform {
 ))]
 pub mod android;
 
+pub use i_slint_backend_selector::api::*;
+
 /// Helper type that helps checking that the generated code is generated for the right version
 #[doc(hidden)]
 #[allow(non_camel_case_types)]
-pub struct VersionCheck_1_9_0;
+pub struct VersionCheck_1_13_0;
 
 #[cfg(doctest)]
 mod compile_fail_tests;
 
 #[cfg(doc)]
 pub mod docs;
+
+#[cfg(feature = "unstable-wgpu-25")]
+pub mod wgpu_25 {
+    //! WGPU 25.x specific types and re-exports.
+    //!
+    //! *Note*: This module is behind a feature flag and may be removed or changed in future minor releases,
+    //!         as new major WGPU releases become available.
+    //!
+    //! Use the types in this module in combination with other APIs to integrate external, WGPU-based rendering engines
+    //! into a UI with Slint.
+    //!
+    //! First, ensure that WGPU is used for rendering with Slint by using [`slint::BackendSelector::require_wgpu_25()`](i_slint_backend_selector::api::BackendSelector::require_wgpu_25()).
+    //! This function accepts a pre-configured WGPU setup or configuration hints such as required features or memory limits.
+    //!
+    //! For rendering, it's crucial that you're using the same [`wgpu::Device`] and [`wgpu::Queue`] for allocating textures or submitting commands as Slint. Obtain the same queue
+    //! by either using [`WGPUConfiguration::Manual`] to make Slint use an existing WGPU configuration, or use [`slint::Window::set_rendering_notifier()`](i_slint_core::api::Window::set_rendering_notifier())
+    //! to let Slint invoke a callback that provides access device, queue, etc. in [`slint::GraphicsAPI::WGPU25`](i_slint_core::api::GraphicsAPI::WGPU25).
+    //!
+    //! To integrate rendering content into a scene shared with a Slint UI, use either [`slint::Window::set_rendering_notifier()`](i_slint_core::api::Window::set_rendering_notifier()) to render an underlay
+    //! or overlay, or integrate externally produced [`wgpu::Texture`]s using [`slint::Image::try_from<wgpu::Texture>()`](i_slint_core::graphics::Image::try_from).
+    //!
+    //! The following example allocates a [`wgpu::Texture`] and, for the sake of simplicity in this documentation, fills with green as color, and then proceeds to set it as a `slint::Image` in the scene.
+    //!
+    //! `Cargo.toml`:
+    //! ```toml
+    //! slint = { version = "~1.13", features = ["unstable-wgpu-25"] }
+    //! ```
+    //!
+    //! `main.rs`:
+    //!```rust,no_run
+    //!
+    //! use slint::wgpu_25::wgpu;
+    //! use wgpu::util::DeviceExt;
+    //!
+    //!slint::slint!{
+    //!    export component HelloWorld inherits Window {
+    //!        preferred-width: 320px;
+    //!        preferred-height: 300px;
+    //!        in-out property <image> app-texture;
+    //!        VerticalLayout {
+    //!            Text {
+    //!                text: "hello world";
+    //!                color: green;
+    //!            }
+    //!            Image { source: root.app-texture; }
+    //!        }
+    //!    }
+    //!}
+    //!fn main() -> Result<(), Box<dyn std::error::Error>> {
+    //!    slint::BackendSelector::new()
+    //!        .require_wgpu_25(slint::wgpu_25::WGPUConfiguration::default())
+    //!        .select()?;
+    //!    let app = HelloWorld::new()?;
+    //!
+    //!    let app_weak = app.as_weak();
+    //!
+    //!    app.window().set_rendering_notifier(move |state, graphics_api| {
+    //!        let (Some(app), slint::RenderingState::RenderingSetup, slint::GraphicsAPI::WGPU25{ device, queue, ..}) = (app_weak.upgrade(), state, graphics_api) else {
+    //!            return;
+    //!        };
+    //!
+    //!        let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(320, 200);
+    //!        pixels.make_mut_slice().fill(slint::Rgba8Pixel {
+    //!            r: 0,
+    //!            g: 255,
+    //!            b :0,
+    //!            a: 255,
+    //!        });
+    //!
+    //!        let texture = device.create_texture_with_data(queue,
+    //!            &wgpu::TextureDescriptor {
+    //!                label: None,
+    //!                size: wgpu::Extent3d { width: 320, height: 200, depth_or_array_layers: 1 },
+    //!                mip_level_count: 1,
+    //!                sample_count: 1,
+    //!                dimension: wgpu::TextureDimension::D2,
+    //!                format: wgpu::TextureFormat::Rgba8Unorm,
+    //!                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    //!                view_formats: &[],
+    //!            },
+    //!            wgpu::util::TextureDataOrder::default(),
+    //!            pixels.as_bytes(),
+    //!        );
+    //!
+    //!        let imported_image = slint::Image::try_from(texture).unwrap();
+    //!
+    //!        app.set_app_texture(imported_image);
+    //!    })?;
+    //!
+    //!    app.run()?;
+    //!
+    //!    Ok(())
+    //!}
+    //!```
+    //!
+    pub use i_slint_core::graphics::wgpu_25::*;
+}
+
+#[cfg(feature = "unstable-winit-030")]
+pub mod winit_030 {
+    //! Winit 0.30.x specific types and re-exports.
+    //!
+    //! *Note*: This module is behind a feature flag and may be removed or changed in future minor releases,
+    //!         as new major Winit releases become available.
+    //!
+    //! Use the types and traits in this module in combination with other APIs to access additional window properties,
+    //! create custom windows, or hook into the winit event loop.
+    //!
+    //! For example, use the [`WinitWindowAccessor`] to obtain access to the underling [`winit::window::Window`]:
+    //!
+    //! `Cargo.toml`:
+    //! ```toml
+    //! slint = { version = "~1.12", features = ["unstable-winit-030"] }
+    //! ```
+    //!
+    //! `main.rs`:
+    //! ```rust,no_run
+    //! // Bring winit and accessor traits into scope.
+    //! use slint::winit_030::{WinitWindowAccessor, winit};
+    //!
+    //! slint::slint!{
+    //!     import { VerticalBox, Button } from "std-widgets.slint";
+    //!     export component HelloWorld inherits Window {
+    //!         callback clicked;
+    //!         VerticalBox {
+    //!             Text {
+    //!                 text: "hello world";
+    //!                 color: green;
+    //!             }
+    //!             Button {
+    //!                 text: "Click me";
+    //!                 clicked => { root.clicked(); }
+    //!             }
+    //!         }
+    //!     }
+    //! }
+    //! fn main() -> Result<(), Box<dyn std::error::Error>> {
+    //!     // Make sure the winit backed is selected:
+    //!    slint::BackendSelector::new()
+    //!        .backend_name("winit".into())
+    //!        .select()?;
+    //!
+    //!     let app = HelloWorld::new()?;
+    //!     let app_weak = app.as_weak();
+    //!     app.on_clicked(move || {
+    //!         // access the winit window
+    //!         let app = app_weak.unwrap();
+    //!         app.window().with_winit_window(|winit_window: &winit::window::Window| {
+    //!             eprintln!("window id = {:#?}", winit_window.id());
+    //!         });
+    //!     });
+    //!     app.run()?;
+    //!     Ok(())
+    //! }
+    //! ```
+    //! See also [`BackendSelector::with_winit_event_loop_builder()`](crate::BackendSelector::with_winit_event_loop_builder())
+    //! and [`BackendSelector::with_winit_window_attributes_hook()`](crate::BackendSelector::with_winit_window_attributes_hook()).
+
+    pub use i_slint_backend_winit::{
+        winit, EventLoopBuilder, SlintEvent, WinitWindowAccessor, WinitWindowEventResult,
+    };
+}

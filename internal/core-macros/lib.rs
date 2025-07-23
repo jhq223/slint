@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
+
+// Copyright © SixtyFPS GmbH <info@slint.dev>
 
 #![doc = include_str!("README.md")]
 #![doc(html_logo_url = "https://slint.dev/logo/slint-logo-square-light.svg")]
@@ -7,6 +10,8 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
 use quote::quote;
+
+mod slint_doc;
 
 /// This derive macro is used with structures in the run-time library that are meant
 /// to be exposed to the language. The structure is introspected for properties and fields
@@ -178,4 +183,54 @@ fn callback_arg(ty: &syn::Type) -> Option<(&syn::Type, Option<&syn::Type>)> {
 #[proc_macro_attribute]
 pub fn identity(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
+}
+
+/// To be applied on any item that has documentation comment, it will convert link to `slint:Foo` to the link from the
+/// documentation map from link-data.json
+#[proc_macro_attribute]
+pub fn slint_doc(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    use syn::visit_mut::VisitMut;
+    let mut visitor = slint_doc::Visitor::new();
+    let mut item = syn::parse_macro_input!(item as syn::Item);
+    visitor.visit_item_mut(&mut item);
+    assert!(visitor.1, "No slint link found");
+    quote!(#item).into()
+}
+
+/// Same as `slint_doc` but for string literals instead of doc comments (useful for crate level documentation that cannot have an attribute)
+#[proc_macro]
+pub fn slint_doc_str(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::LitStr);
+    let mut doc = input.value();
+    let mut visitor = slint_doc::Visitor::new();
+    visitor.process_string(&mut doc);
+    assert!(visitor.1, "No slint link found");
+    quote!(#doc).into()
+}
+
+/// Attribute macro that removes `extern "..."` from the function signatures
+///
+/// This is useful because wasm does not support `extern "C-unwind"` and also
+/// warn about ABI incompatibilities we wouldn't care about.
+///
+/// (can be applied to a function or a vtable struct)
+#[proc_macro_attribute]
+pub fn remove_extern(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let mut input = syn::parse_macro_input!(item as syn::Item);
+
+    match &mut input {
+        syn::Item::Fn(item_fn) => {
+            item_fn.sig.abi.take();
+        }
+        syn::Item::Struct(item_struct) => {
+            for f in item_struct.fields.iter_mut() {
+                if let syn::Type::BareFn(f) = &mut f.ty {
+                    f.abi.take();
+                }
+            }
+        }
+        _ => (),
+    }
+
+    quote!(#input).into()
 }

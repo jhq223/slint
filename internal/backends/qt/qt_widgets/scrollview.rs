@@ -23,8 +23,8 @@ pub struct NativeScrollView {
     pub native_padding_bottom: Property<LogicalLength>,
     pub enabled: Property<bool>,
     pub has_focus: Property<bool>,
-    pub vertical_bar_policy: Property<ScrollBarPolicy>,
-    pub horizontal_bar_policy: Property<ScrollBarPolicy>,
+    pub vertical_scrollbar_policy: Property<ScrollBarPolicy>,
+    pub horizontal_scrollbar_policy: Property<ScrollBarPolicy>,
     data: Property<NativeSliderData>,
     widget_ptr: std::cell::Cell<SlintTypeErasedWidgetPtr>,
     animation_tracker: Property<i32>,
@@ -93,6 +93,7 @@ impl Item for NativeScrollView {
         self: Pin<&Self>,
         orientation: Orientation,
         _window_adapter: &Rc<dyn WindowAdapter>,
+        _self_rc: &ItemRc,
     ) -> LayoutInfo {
         let min = match orientation {
             Orientation::Horizontal => self.native_padding_left() + self.native_padding_right(),
@@ -104,7 +105,7 @@ impl Item for NativeScrollView {
 
     fn input_event_filter_before_children(
         self: Pin<&Self>,
-        _: MouseEvent,
+        _: &MouseEvent,
         _window_adapter: &Rc<dyn WindowAdapter>,
         _self_rc: &ItemRc,
     ) -> InputEventFilterResult {
@@ -113,7 +114,7 @@ impl Item for NativeScrollView {
 
     fn input_event(
         self: Pin<&Self>,
-        event: MouseEvent,
+        event: &MouseEvent,
         _window_adapter: &Rc<dyn WindowAdapter>,
         self_rc: &i_slint_core::items::ItemRc,
     ) -> InputEventResult {
@@ -224,6 +225,7 @@ impl Item for NativeScrollView {
                     }
                     InputEventResult::EventAccepted
                 }
+                MouseEvent::DragMove(..) | MouseEvent::Drop(..) => InputEventResult::EventIgnored,
             };
             self.data.set(data);
             result
@@ -295,8 +297,8 @@ impl Item for NativeScrollView {
         };
         let enabled: bool = this.enabled();
         let has_focus: bool = this.has_focus();
-        let vertical_bar_visible = (this.vertical_bar_policy() == ScrollBarPolicy::AlwaysOn) || ((this.vertical_bar_policy() == ScrollBarPolicy::AsNeeded) && (this.vertical_max().get() > 0.0));
-        let horizontal_bar_visible = (this.horizontal_bar_policy() == ScrollBarPolicy::AlwaysOn) || ((this.horizontal_bar_policy() == ScrollBarPolicy::AsNeeded) && (this.horizontal_max().get() > 0.0));
+        let vertical_bar_visible = (this.vertical_scrollbar_policy() == ScrollBarPolicy::AlwaysOn) || ((this.vertical_scrollbar_policy() == ScrollBarPolicy::AsNeeded) && (this.vertical_max().get() > 0.0));
+        let horizontal_bar_visible = (this.horizontal_scrollbar_policy() == ScrollBarPolicy::AlwaysOn) || ((this.horizontal_scrollbar_policy() == ScrollBarPolicy::AsNeeded) && (this.horizontal_max().get() > 0.0));
         let scrollbar_bar_visible = vertical_bar_visible || horizontal_bar_visible;
         let frame_around_contents = cpp!(unsafe [
             painter as "QPainterPtr*",
@@ -444,6 +446,19 @@ impl Item for NativeScrollView {
                 initial_state
             );
         }
+    }
+
+    fn bounding_rect(
+        self: core::pin::Pin<&Self>,
+        _window_adapter: &Rc<dyn WindowAdapter>,
+        _self_rc: &ItemRc,
+        geometry: LogicalRect,
+    ) -> LogicalRect {
+        geometry
+    }
+
+    fn clips_children(self: core::pin::Pin<&Self>) -> bool {
+        false
     }
 }
 

@@ -25,6 +25,10 @@ export component ComboBox {
     forward-focus: base;
     accessible-role: combobox;
     accessible-enabled: root.enabled;
+    accessible-expandable: true;
+    accessible-expanded: base.popup-has-focus;
+    accessible-value <=> root.current-value;
+    accessible-action-expand => { base.show-popup(); }
 
     states [
         disabled when !root.enabled : {
@@ -47,6 +51,9 @@ export component ComboBox {
 
         show-popup => {
             popup.show();
+        }
+        close-popup => {
+            popup.close();
         }
     }
 
@@ -71,6 +78,7 @@ export component ComboBox {
             // font-family: MaterialFontSettings.body-large.font;
             font-size: MaterialFontSettings.body-large.font-size;
             font-weight: MaterialFontSettings.body-large.font-weight;
+            accessible-role: none;
         }
 
         icon := Image {
@@ -79,6 +87,7 @@ export component ComboBox {
             y: (parent.height - self.height) / 2;
             source: Icons.expand-more;
             colorize: MaterialPalette.control-foreground;
+            accessible-role: none;
         }
     }
 
@@ -87,6 +96,7 @@ export component ComboBox {
         y: root.height;
         width: root.width;
         height: root.visible-items * MaterialSizeSettings.item-height;
+        forward-focus: inner-fs;
 
         popup-container := Rectangle {
             background: MaterialPalette.alternate-background;
@@ -96,19 +106,28 @@ export component ComboBox {
             border-radius: 4px;
         }
 
-        ScrollView {
-            VerticalLayout {
-                alignment: start;
+        inner-fs := FocusScope {
+            focus-changed-event => {
+                base.popup-has-focus = self.has-focus;
+            }
+            key-pressed(event) => {
+                return base.popup-key-handler(event);
+            }
 
-                for value[index] in root.model: ListItem {
-                    item: { text: value };
-                    is-selected: index == root.current-index;
-                    has-hover: touch-area.has-hover;
-                    pressed: touch-area.pressed;
+            ScrollView {
+                VerticalLayout {
+                    alignment: start;
 
-                    touch-area := StateLayer {
-                        clicked => {
-                            base.select(index);
+                    for value[index] in root.model: ListItem {
+                        item: { text: value };
+                        is-selected: index == root.current-index;
+                        has-hover: touch-area.has-hover;
+                        pressed: touch-area.pressed;
+
+                        touch-area := StateLayer {
+                            clicked => {
+                                base.select(index);
+                            }
                         }
                     }
                 }
